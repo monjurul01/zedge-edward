@@ -675,7 +675,7 @@ jobs:
             try {
               await page.waitForSelector(
                 'input[data-hook="form-field-files-input"]',
-                { state: "attached", timeout: 30000 }
+                { state: "attached", timeout: 60000 }
               );
               console.log("Upload dialog detected via file input");
               dialog = page.locator('[role="dialog"]').filter({ has: page.locator('input[data-hook="form-field-files-input"]') }).first();
@@ -686,7 +686,7 @@ jobs:
               }
             } catch (e) {
               await page.screenshot({ path: "zedge-dialog-error.png", fullPage: true });
-              throw new Error(`Upload dialog did not appear after 30s. Check zedge-dialog-error.png. Original: ${e.message}`);
+              throw new Error(`Upload dialog did not appear after 60s. Check zedge-dialog-error.png. Original: ${e.message}`);
             }
             await page.waitForTimeout(1000);
 
