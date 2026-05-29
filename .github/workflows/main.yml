@@ -550,9 +550,13 @@ jobs:
 
           async function safeClick(locator, label, timeout = 30000) {
             console.log(`Clicking ${label}`);
+            const page = locator.page();
+            await dismissConsentPopup(page, 1500).catch(() => {});
             await locator.waitFor({ state: "visible", timeout });
             await locator.scrollIntoViewIfNeeded();
-            await locator.click();
+            await dismissConsentPopup(page, 1500).catch(() => {});
+            await locator.click({ timeout });
+            await dismissConsentPopup(page, 1500).catch(() => {});
           }
 
           async function dismissConsentPopup(page, timeoutMs = 8000) {
@@ -583,11 +587,15 @@ jobs:
 
           async function safeType(locator, value, label) {
             console.log(`Typing ${label}`);
+            const page = locator.page();
+            await dismissConsentPopup(page, 1500).catch(() => {});
             await locator.waitFor({ state: "visible" });
             await locator.scrollIntoViewIfNeeded();
+            await dismissConsentPopup(page, 1500).catch(() => {});
             await locator.click();
             await locator.fill("");
             await locator.pressSequentially(value, { delay: 90 });
+            await dismissConsentPopup(page, 1500).catch(() => {});
           }
 
           async function scrollFullPage(page) {
