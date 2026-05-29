@@ -550,52 +550,18 @@ jobs:
 
           async function safeClick(locator, label, timeout = 30000) {
             console.log(`Clicking ${label}`);
-            const page = locator.page();
-            await dismissConsentPopup(page, 1500).catch(() => {});
             await locator.waitFor({ state: "visible", timeout });
             await locator.scrollIntoViewIfNeeded();
-            await dismissConsentPopup(page, 1500).catch(() => {});
-            await locator.click({ timeout });
-            await dismissConsentPopup(page, 1500).catch(() => {});
-          }
-
-          async function dismissConsentPopup(page, timeoutMs = 8000) {
-            const start = Date.now();
-            const selectors = [
-              'button:has-text("Close")',
-              'button:has-text("Do not Share or Sell my Personal Information")'
-            ];
-
-            while (Date.now() - start < timeoutMs) {
-              for (const selector of selectors) {
-                const popupBtn = page.locator(selector).first();
-                if (await popupBtn.count()) {
-                  try {
-                    await popupBtn.click({ timeout: 3000 });
-                  } catch {
-                    await popupBtn.click({ force: true, timeout: 3000 });
-                  }
-                  await page.waitForTimeout(1000);
-                  return true;
-                }
-              }
-              await page.waitForTimeout(500);
-            }
-
-            return false;
+            await locator.click();
           }
 
           async function safeType(locator, value, label) {
             console.log(`Typing ${label}`);
-            const page = locator.page();
-            await dismissConsentPopup(page, 1500).catch(() => {});
             await locator.waitFor({ state: "visible" });
             await locator.scrollIntoViewIfNeeded();
-            await dismissConsentPopup(page, 1500).catch(() => {});
             await locator.click();
             await locator.fill("");
             await locator.pressSequentially(value, { delay: 90 });
-            await dismissConsentPopup(page, 1500).catch(() => {});
           }
 
           async function scrollFullPage(page) {
@@ -675,7 +641,7 @@ jobs:
             try {
               await page.waitForSelector(
                 'input[data-hook="form-field-files-input"]',
-                { state: "attached", timeout: 60000 }
+                { state: "attached", timeout: 30000 }
               );
               console.log("Upload dialog detected via file input");
               dialog = page.locator('[role="dialog"]').filter({ has: page.locator('input[data-hook="form-field-files-input"]') }).first();
@@ -686,7 +652,7 @@ jobs:
               }
             } catch (e) {
               await page.screenshot({ path: "zedge-dialog-error.png", fullPage: true });
-              throw new Error(`Upload dialog did not appear after 60s. Check zedge-dialog-error.png. Original: ${e.message}`);
+              throw new Error(`Upload dialog did not appear after 30s. Check zedge-dialog-error.png. Original: ${e.message}`);
             }
             await page.waitForTimeout(1000);
 
@@ -1274,6 +1240,83 @@ jobs:
                     }
                   };
                 }
+
+                // Keep dismissing the Zedge data collection/privacy popup whenever it appears.
+                (() => {
+                  if (window.__zedgePrivacyPopupWatcherInstalled) return;
+                  window.__zedgePrivacyPopupWatcherInstalled = true;
+
+                  const overlaySelectors = [
+                    '[role="dialog"]',
+                    '[role="alertdialog"]',
+                    '[class*="modal"]',
+                    '[class*="overlay"]',
+                    '[class*="consent"]',
+                    '[class*="cookie"]',
+                    '[class*="privacy"]',
+                    '[class*="popup"]',
+                    '[class*="notice"]',
+                    '[id*="modal"]',
+                    '[id*="popup"]',
+                    '[id*="consent"]',
+                    '[id*="cookie"]',
+                    '[id*="privacy"]'
+                  ];
+
+                  const buttonHints = ['close', 'dismiss', 'got it', 'ok', 'accept'];
+
+                  const tryDismiss = () => {
+                    const overlays = [...document.querySelectorAll(overlaySelectors.join(', '))];
+
+                    for (const overlay of overlays) {
+                      const text = (overlay.innerText || '').toLowerCase();
+                      const looksRelevant =
+                        text.includes('data collection') ||
+                        text.includes('privacy policy') ||
+                        text.includes('personal information') ||
+                        text.includes('consent') ||
+                        text.includes('privacy') ||
+                        text.includes('cookie');
+
+                      if (!looksRelevant) continue;
+
+                      const buttons = [...overlay.querySelectorAll('button, [role="button"], a')];
+                      const closeButton = buttons.find(btn => {
+                        const label = `${btn.textContent || ''} ${btn.getAttribute('aria-label') || ''} ${btn.getAttribute('title') || ''}`.toLowerCase();
+                        return buttonHints.some(hint => label.includes(hint));
+                      });
+
+                      if (closeButton) {
+                        closeButton.click();
+                        return true;
+                      }
+                    }
+
+                    return false;
+                  };
+
+                  const start = () => {
+                    tryDismiss();
+
+                    const observer = new MutationObserver(() => {
+                      tryDismiss();
+                    });
+
+                    observer.observe(document.documentElement, {
+                      subtree: true,
+                      childList: true,
+                      attributes: true
+                    });
+
+                    setInterval(tryDismiss, 500);
+                  };
+
+                  if (document.documentElement) {
+                    start();
+                  } else {
+                    document.addEventListener('DOMContentLoaded', start, { once: true });
+                  }
+                })();
               }, {
                 hc:       fpHC,
                 dm:       fpDM,
@@ -1477,9 +1520,6 @@ jobs:
                   console.log("Navigating to Zedge upload portal");
                   await page.goto("https://upload.zedge.net", { waitUntil: "domcontentloaded" });
                   await page.waitForLoadState("networkidle");
-
-                  // Dismiss the consent popup if it appears on the portal page
-                  await dismissConsentPopup(page);
 
                   // Click Profiles tab
                   await safeClick(
