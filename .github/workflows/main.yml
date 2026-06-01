@@ -928,86 +928,56 @@ jobs:
 
           // ── Dismiss consent/privacy modals inside iframes ──────────────
           async function dismissConsentIframes(page) {
-            for (let attempt = 0; attempt < 4; attempt++) {
+            // Strategy: try clicking "Agree" in ALL frames — no content/URL filtering
+            // (cross-origin frame.evaluate() silently fails, so we skip content checks)
+            for (let attempt = 0; attempt < 5; attempt++) {
               const frames = page.frames();
               for (const frame of frames) {
                 try {
-                  // Check frame content for consent-related text (NOT by URL)
-                  const hasConsent = await frame.evaluate(() => {
-                    const body = document.body;
-                    if (!body) return false;
-                    const text = (body.innerText || '').toLowerCase();
-                    return text.includes('consent management') || text.includes('cookie') || text.includes('privacy policy');
-                  }).catch(() => false);
+                  if (frame === page.mainFrame()) continue;
 
-                  if (!hasConsent) continue;
-
-                  console.log(`Found consent frame (attempt ${attempt + 1}): ${frame.url()}`);
-
-                  // Try "Agree" first — click ALL Agree buttons if multiple
-                  const agreeButtons = frame.locator('button:has-text("Agree")');
-                  const agreeCount = await agreeButtons.count().catch(() => 0);
-                  if (agreeCount > 0) {
-                    // Click the last "Agree" (usually the "Agree to all" / "Allow all" one)
-                    await agreeButtons.last().click({ timeout: 5000 }).catch(() => {});
-                    console.log(`Clicked 'Agree' in consent iframe (${agreeCount} buttons found)`);
+                  // Try "Agree" button (click LAST one = "Agree to all")
+                  const agreeBtn = frame.locator('button:has-text("Agree")').last();
+                  if (await agreeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+                    await agreeBtn.click({ timeout: 5000 }).catch(() => {});
+                    console.log(`Clicked 'Agree' in frame: ${frame.url()}`);
                     await page.waitForTimeout(1500);
                     return true;
                   }
 
-                  // Try "Accept" / "Allow" buttons
-                  const acceptBtn = frame.locator('button:has-text("Accept"), button:has-text("Allow"), button:has-text("Accept All")').first();
-                  if (await acceptBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+                  // Try "Accept" / "Allow" button
+                  const acceptBtn = frame.locator('button:has-text("Accept"), button:has-text("Allow")').last();
+                  if (await acceptBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
                     await acceptBtn.click({ timeout: 5000 }).catch(() => {});
-                    console.log("Clicked 'Accept' in consent iframe");
+                    console.log(`Clicked 'Accept' in frame: ${frame.url()}`);
                     await page.waitForTimeout(1500);
                     return true;
                   }
 
                   // Try close (X) button
-                  const closeBtn = frame.locator('button[aria-label*="close" i], button[title*="close" i], button:has-text("×"), button:has-text("✕")').first();
-                  if (await closeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+                  const closeBtn = frame.locator('[aria-label*="close" i], [title*="close" i]').first();
+                  if (await closeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
                     await closeBtn.click({ timeout: 5000 }).catch(() => {});
-                    console.log("Clicked close button in consent iframe");
+                    console.log(`Clicked close in frame: ${frame.url()}`);
                     await page.waitForTimeout(1500);
                     return true;
                   }
 
-                  // Last resort: force-remove the iframe from parent page
-                  console.log("No clickable button found — removing consent iframe from DOM");
-                  await page.evaluate(() => {
-                    document.querySelectorAll('iframe').forEach(iframe => {
-                      try {
-                        const doc = iframe.contentDocument;
-                        if (doc && doc.body) {
-                          const text = (doc.body.innerText || '').toLowerCase();
-                          if (text.includes('consent') || text.includes('cookie') || text.includes('privacy')) {
-                            iframe.remove();
-                          }
-                        }
-                      } catch (e) {
-                        // Cross-origin — try removing by src check
-                        const src = (iframe.src || '').toLowerCase();
-                        if (src.includes('consent') || src.includes('cookie') || src.includes('privacy') || src.includes('cmp') || src.includes('onetrust') || src.includes('sourcepoint') || src.includes('quantcast')) {
-                          iframe.remove();
-                        }
-                      }
-                    });
-                    document.body.style.overflow = '';
-                    document.documentElement.style.overflow = '';
-                  }).catch(() => {});
-                  console.log("Force-removed consent iframe(s)");
-                  await page.waitForTimeout(1000);
-                  return true;
-
+                  // Try ANY element with "Agree" text (not just button)
+                  const anyAgree = frame.locator('text=Agree').last();
+                  if (await anyAgree.isVisible({ timeout: 1000 }).catch(() => false)) {
+                    await anyAgree.click({ timeout: 5000 }).catch(() => {});
+                    console.log(`Clicked 'Agree' element in frame: ${frame.url()}`);
+                    await page.waitForTimeout(1500);
+                    return true;
+                  }
                 } catch (e) { /* skip frame */ }
               }
 
-              // Wait before next attempt for dynamic iframes
-              if (attempt < 3) await page.waitForTimeout(2000);
+              if (attempt < 4) await page.waitForTimeout(2000);
             }
 
-            // Check main page as fallback
+            // Fallback: check main page for consent modal
             try {
               const mainAgree = page.locator('[role="dialog"] button:has-text("Agree"), [class*="consent"] button:has-text("Agree"), [class*="cookie"] button:has-text("Agree")').first();
               if (await mainAgree.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -1016,6 +986,27 @@ jobs:
                 await page.waitForTimeout(1500);
                 return true;
               }
+            } catch (e) { /* skip */ }
+
+            // Last resort: force-remove all consent iframes
+            try {
+              await page.evaluate(() => {
+                let removed = 0;
+                document.querySelectorAll('iframe').forEach(iframe => {
+                  const src = (iframe.src || '').toLowerCase();
+                  const id = (iframe.id || '').toLowerCase();
+                  const cls = (iframe.className || '').toLowerCase();
+                  if (src.includes('consent') || src.includes('cookie') || src.includes('privacy') || src.includes('cmp') || src.includes('onetrust') || src.includes('sourcepoint') || src.includes('quantcast') || src.includes('cookiebot') || id.includes('consent') || cls.includes('consent')) {
+                    iframe.remove();
+                    removed++;
+                  }
+                });
+                if (removed > 0) {
+                  document.body.style.overflow = '';
+                  document.documentElement.style.overflow = '';
+                }
+                return removed;
+              }).catch(() => {});
             } catch (e) { /* skip */ }
 
             return false;
