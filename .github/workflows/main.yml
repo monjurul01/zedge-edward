@@ -926,6 +926,70 @@ jobs:
             return { removed: false, statusName: "UNKNOWN" };
           }
 
+          // ── Dismiss consent/privacy modals inside iframes ──────────────
+          async function dismissConsentIframes(page) {
+            const consentKeywords = ['consent', 'cookie', 'privacy', 'cmp', 'onetrust', 'cookiebot', 'quantcast', 'sourcepoint'];
+            const frames = page.frames();
+            for (const frame of frames) {
+              try {
+                const url = (frame.url() || '').toLowerCase();
+                const isConsentFrame = consentKeywords.some(k => url.includes(k));
+                if (!isConsentFrame) continue;
+
+                console.log(`Found consent iframe: ${frame.url()}`);
+
+                // Try "Agree" button first
+                const agreeBtn = frame.locator('button:has-text("Agree")').first();
+                if (await agreeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+                  await agreeBtn.click({ timeout: 3000 }).catch(() => {});
+                  console.log("Clicked 'Agree' in consent iframe");
+                  await page.waitForTimeout(1000);
+                  return true;
+                }
+
+                // Try "Accept" button
+                const acceptBtn = frame.locator('button:has-text("Accept")').first();
+                if (await acceptBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+                  await acceptBtn.click({ timeout: 3000 }).catch(() => {});
+                  console.log("Clicked 'Accept' in consent iframe");
+                  await page.waitForTimeout(1000);
+                  return true;
+                }
+
+                // Try close (X) button
+                const closeBtn = frame.locator('button[aria-label*="close" i], button[title*="close" i], button:has-text("×")').first();
+                if (await closeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+                  await closeBtn.click({ timeout: 3000 }).catch(() => {});
+                  console.log("Clicked close button in consent iframe");
+                  await page.waitForTimeout(1000);
+                  return true;
+                }
+
+                // Fallback: try any button that looks like it dismisses
+                const anyDismiss = frame.locator('button:has-text("OK"), button:has-text("Got it"), button:has-text("Dismiss")').first();
+                if (await anyDismiss.isVisible({ timeout: 1000 }).catch(() => false)) {
+                  await anyDismiss.click({ timeout: 3000 }).catch(() => {});
+                  console.log("Clicked dismiss button in consent iframe");
+                  await page.waitForTimeout(1000);
+                  return true;
+                }
+              } catch (e) { /* skip frame */ }
+            }
+
+            // Also check main page for consent modals not in iframes
+            try {
+              const mainAgree = page.locator('[role="dialog"] button:has-text("Agree"), [class*="consent"] button:has-text("Agree"), [class*="cookie"] button:has-text("Agree")').first();
+              if (await mainAgree.isVisible({ timeout: 1000 }).catch(() => false)) {
+                await mainAgree.click({ timeout: 3000 }).catch(() => {});
+                console.log("Clicked 'Agree' on main page consent modal");
+                await page.waitForTimeout(1000);
+                return true;
+              }
+            } catch (e) { /* skip */ }
+
+            return false;
+          }
+
           // ── Random Fingerprint Pool ────────────────────────────────
           const FP_USER_AGENTS = [
             // ── Chrome on Windows ──────────────────────────────────────
@@ -1379,6 +1443,7 @@ jobs:
               await page.goto("https://upload.zedge.net", { waitUntil: "domcontentloaded" });
               await page.waitForLoadState("networkidle");
               await page.waitForTimeout(2000);
+              await dismissConsentIframes(page);
 
               // Screenshot to capture exactly what the page shows before login attempt
               await page.screenshot({ path: "zedge-before-login.png", fullPage: true });
@@ -1554,6 +1619,7 @@ jobs:
                   console.log("Navigating to Zedge upload portal");
                   await page.goto("https://upload.zedge.net", { waitUntil: "domcontentloaded" });
                   await page.waitForLoadState("networkidle");
+                  await dismissConsentIframes(page);
 
                   // Click Profiles tab
                   await safeClick(
@@ -1582,6 +1648,7 @@ jobs:
                   await page.goto(targetContentUrl, { waitUntil: "domcontentloaded" });
                   await page.waitForLoadState("networkidle");
                   await page.waitForTimeout(1000);
+                  await dismissConsentIframes(page);
 
                   // Click the Upload (+) button — now already on the right content-type page
                   await safeClick(
