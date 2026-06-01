@@ -1263,22 +1263,14 @@ jobs:
                     '[id*="privacy"]'
                   ];
 
-                  const buttonHints = ['close', 'dismiss', 'got it', 'ok', 'accept'];
+                  const buttonHints = ['close', 'dismiss', 'got it', 'ok', 'accept', 'agree'];
 
                   const tryDismiss = () => {
                     const overlays = [...document.querySelectorAll(overlaySelectors.join(', '))];
 
                     for (const overlay of overlays) {
-                      const text = (overlay.innerText || '').toLowerCase();
-                      const looksRelevant =
-                        text.includes('data collection') ||
-                        text.includes('privacy policy') ||
-                        text.includes('personal information') ||
-                        text.includes('consent') ||
-                        text.includes('privacy') ||
-                        text.includes('cookie');
-
-                      if (!looksRelevant) continue;
+                      // Skip Zedge's own workflow dialogs (they contain data-hook elements)
+                      if (overlay.querySelector('[data-hook]') || overlay.closest('[data-hook]')) continue;
 
                       const buttons = [...overlay.querySelectorAll('button, [role="button"], a')];
                       const closeButton = buttons.find(btn => {
