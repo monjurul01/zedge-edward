@@ -1342,17 +1342,10 @@ jobs:
                   window.__zedgePrivacyPopupWatcherInstalled = true;
 
                   const overlaySelectors = [
-                    '[role="dialog"]',
-                    '[role="alertdialog"]',
-                    '[class*="modal"]',
-                    '[class*="overlay"]',
                     '[class*="consent"]',
                     '[class*="cookie"]',
                     '[class*="privacy"]',
-                    '[class*="popup"]',
                     '[class*="notice"]',
-                    '[id*="modal"]',
-                    '[id*="popup"]',
                     '[id*="consent"]',
                     '[id*="cookie"]',
                     '[id*="privacy"]'
