@@ -1266,10 +1266,10 @@ jobs:
                   const buttonHints = ['close', 'dismiss', 'got it', 'ok', 'accept', 'agree'];
 
                   const tryDismiss = () => {
+                    // ── 1. Try main document overlays ──
                     const overlays = [...document.querySelectorAll(overlaySelectors.join(', '))];
 
                     for (const overlay of overlays) {
-                      // Skip Zedge's own workflow dialogs (they contain data-hook elements)
                       if (overlay.querySelector('[data-hook]') || overlay.closest('[data-hook]')) continue;
 
                       const buttons = [...overlay.querySelectorAll('button, [role="button"], a')];
@@ -1280,6 +1280,48 @@ jobs:
 
                       if (closeButton) {
                         closeButton.click();
+                        return true;
+                      }
+                    }
+
+                    // ── 2. Try iframes (consent modals often live in iframes) ──
+                    const iframes = [...document.querySelectorAll('iframe')];
+                    for (const iframe of iframes) {
+                      try {
+                        const iDoc = iframe.contentDocument;
+                        if (!iDoc) continue;
+                        const iframeOverlays = iDoc.querySelectorAll(
+                          '[class*="consent"], [class*="modal"], [class*="cookie"], [role="dialog"], [id*="consent"], [id*="cookie"]'
+                        );
+                        for (const ov of iframeOverlays) {
+                          const iButtons = [...ov.querySelectorAll('button, [role="button"], a')];
+                          const closeBtn = iButtons.find(b => {
+                            const l = `${b.textContent || ''} ${b.getAttribute('aria-label') || ''} ${b.getAttribute('title') || ''}`.toLowerCase();
+                            return buttonHints.some(h => l.includes(h));
+                          });
+                          if (closeBtn) { closeBtn.click(); return true; }
+                        }
+                      } catch (e) {
+                        // Cross-origin iframe — remove if consent-related
+                        const src = (iframe.src || '').toLowerCase();
+                        if (src.includes('consent') || src.includes('cookie') || src.includes('privacy') || src.includes('onetrust') || src.includes('cookiebot') || src.includes('quantcast') || src.includes('sourcepoint') || src.includes('cmp')) {
+                          iframe.remove();
+                          document.body.style.overflow = '';
+                          document.documentElement.style.overflow = '';
+                          return true;
+                        }
+                      }
+                    }
+
+                    // ── 3. Force-remove any leftover overlay blocking the page ──
+                    const blocked = document.querySelectorAll(
+                      '[class*="consent"], [class*="cookie"], [class*="privacy"], [id*="consent"], [id*="cookie"]'
+                    );
+                    for (const el of blocked) {
+                      if (!el.querySelector('[data-hook]') && !el.closest('[data-hook]')) {
+                        el.remove();
+                        document.body.style.overflow = '';
+                        document.documentElement.style.overflow = '';
                         return true;
                       }
                     }
