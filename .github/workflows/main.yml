@@ -970,12 +970,20 @@ jobs:
               if (attempt < 2) await page.waitForTimeout(2000);
             }
 
-            // Fallback: check main page for consent modal
+            // Fallback: check main page for ANY visible "Agree" element (broad search)
+            // The consent modal may render directly on the page (not in an iframe)
+            // with custom classes that don't contain "consent"/"cookie".
             try {
-              const mainConsent = page.locator('[class*="consent"] button:has-text("Agree"), [class*="cookie"] button:has-text("Agree"), [id*="consent"] button:has-text("Agree"), [id*="cookie"] button:has-text("Agree")').first();
-              if (await mainConsent.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await mainConsent.click({ timeout: 5000 }).catch(() => {});
-                console.log("Clicked 'Agree' on main page consent modal");
+              const agreeEls = await page.locator('text=Agree').all();
+              for (let i = agreeEls.length - 1; i >= 0; i--) {
+                const el = agreeEls[i];
+                const visible = await el.isVisible().catch(() => false);
+                if (!visible) continue;
+                // Skip if inside Zedge workflow element
+                const isWorkflow = await el.evaluate(e => !!e.closest('[data-hook]')).catch(() => true);
+                if (isWorkflow) continue;
+                await el.click({ timeout: 5000 }).catch(() => {});
+                console.log("Clicked 'Agree' element on main page (broad match)");
                 await page.waitForTimeout(1500);
                 return true;
               }
@@ -1645,28 +1653,21 @@ jobs:
                   }
                 }
 
-                // Check 3: any visible "Agree" button that looks like consent (not inside data-hook)
+                // Check 3: any visible "Agree" element not inside a Zedge workflow
                 if (!modalDismissed) {
-                  const allAgree = page.locator('button:has-text("Agree")');
+                  const allAgree = page.locator('text=Agree');
                   const count = await allAgree.count().catch(() => 0);
-                  for (let i = 0; i < count; i++) {
-                    const btn = allAgree.nth(i);
-                    const visible = await btn.isVisible({ timeout: 500 }).catch(() => false);
+                  for (let i = count - 1; i >= 0; i--) {
+                    const el = allAgree.nth(i);
+                    const visible = await el.isVisible({ timeout: 500 }).catch(() => false);
                     if (!visible) continue;
-                    const isWorkflow = await btn.evaluate(el => !!el.closest('[data-hook]')).catch(() => true);
+                    const isWorkflow = await el.evaluate(e => !!e.closest('[data-hook]')).catch(() => true);
                     if (isWorkflow) continue;
-                    const inConsent = await btn.evaluate(el => {
-                      const parent = el.closest('[class*="consent"], [class*="cookie"], [class*="privacy"], [id*="consent"], [id*="cookie"], [role="dialog"], [role="alertdialog"]');
-                      if (!parent) return false;
-                      return (parent.innerText || '').toLowerCase().includes('consent');
-                    }).catch(() => false);
-                    if (inConsent) {
-                      await btn.click({ timeout: 5000 }).catch(() => {});
-                      console.log("Clicked 'Agree' on consent element (pre-login fallback)");
-                      await page.waitForTimeout(1500);
-                      modalDismissed = true;
-                      break;
-                    }
+                    await el.click({ timeout: 5000 }).catch(() => {});
+                    console.log("Clicked 'Agree' element on main page (pre-login broad)");
+                    await page.waitForTimeout(1500);
+                    modalDismissed = true;
+                    break;
                   }
                 }
 
@@ -1733,12 +1734,18 @@ jobs:
                   }
                 } catch (e) { /* skip */ }
               }
-              // Also check main page
-              const postLoginConsent = page.locator('[class*="consent"] button:has-text("Agree"), [class*="cookie"] button:has-text("Agree"), [id*="consent"] button:has-text("Agree")').first();
-              if (await postLoginConsent.isVisible({ timeout: 1000 }).catch(() => false)) {
-                await postLoginConsent.click({ timeout: 5000 }).catch(() => {});
-                console.log("Clicked 'Agree' on main page consent (post-login)");
+              // Also check main page — broad "Agree" text match
+              const postLoginAgreeEls = await page.locator('text=Agree').all().catch(() => []);
+              for (let i = postLoginAgreeEls.length - 1; i >= 0; i--) {
+                const el = postLoginAgreeEls[i];
+                const visible = await el.isVisible().catch(() => false);
+                if (!visible) continue;
+                const isWorkflow = await el.evaluate(e => !!e.closest('[data-hook]')).catch(() => true);
+                if (isWorkflow) continue;
+                await el.click({ timeout: 5000 }).catch(() => {});
+                console.log("Clicked 'Agree' element on main page (post-login broad)");
                 await page.waitForTimeout(1500);
+                break;
               }
 
               // ─────────────────────────────────────────────────────────────
