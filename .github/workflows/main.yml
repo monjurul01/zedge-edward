@@ -1510,6 +1510,10 @@ jobs:
                       }).catch(() => false);
 
                       if (isConsentOverlay) {
+                        // Skip Zedge's own workflow elements (upload, login, edit meta)
+                        const isZedgeWorkflow = await btn.evaluate(el => !!el.closest('[data-hook]')).catch(() => false);
+                        if (isZedgeWorkflow) continue;
+
                         await btn.click({ timeout: 2000 });
                         console.log(`✅ Modal dismissed via: ${selector}`);
                         modalDismissed = true;
@@ -1573,6 +1577,59 @@ jobs:
                 console.log("No consent/privacy modal detected — proceeding.");
               }
 
+              // ── Consent iframe handler via Playwright ──
+              // The consent modal often lives inside an iframe that page.locator() can't reach.
+              // Use page.frames() to find and dismiss it.
+              const consentKw = ['consent', 'cookie', 'privacy', 'cmp', 'onetrust', 'cookiebot', 'quantcast', 'sourcepoint', 'trustarc', 'didomi'];
+              for (const frame of page.frames()) {
+                try {
+                  if (frame === page.mainFrame()) continue;
+                  const fUrl = (frame.url() || '').toLowerCase();
+                  if (!fUrl || fUrl === 'about:blank') continue;
+                  if (!consentKw.some(k => fUrl.includes(k))) continue;
+
+                  console.log(`Found consent iframe during pre-login: ${frame.url()}`);
+
+                  const aBtn = frame.locator('button:has-text("Agree")').last();
+                  if (await aBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+                    await aBtn.click({ timeout: 5000 }).catch(() => {});
+                    console.log("Clicked 'Agree' in consent iframe (pre-login)");
+                    await page.waitForTimeout(1500);
+                    modalDismissed = true;
+                    break;
+                  }
+
+                  const acBtn = frame.locator('button:has-text("Accept")').last();
+                  if (await acBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+                    await acBtn.click({ timeout: 5000 }).catch(() => {});
+                    console.log("Clicked 'Accept' in consent iframe (pre-login)");
+                    await page.waitForTimeout(1500);
+                    modalDismissed = true;
+                    break;
+                  }
+
+                  const cBtn = frame.locator('[aria-label*="close" i], [title*="close" i]').first();
+                  if (await cBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+                    await cBtn.click({ timeout: 5000 }).catch(() => {});
+                    console.log("Clicked close in consent iframe (pre-login)");
+                    await page.waitForTimeout(1500);
+                    modalDismissed = true;
+                    break;
+                  }
+                } catch (e) { /* skip frame */ }
+              }
+
+              // Also try main page consent selectors (not [role="dialog] — too broad)
+              if (!modalDismissed) {
+                const mainConsent = page.locator('[class*="consent"] button:has-text("Agree"), [class*="cookie"] button:has-text("Agree"), [id*="consent"] button:has-text("Agree")').first();
+                if (await mainConsent.isVisible({ timeout: 2000 }).catch(() => false)) {
+                  await mainConsent.click({ timeout: 5000 }).catch(() => {});
+                  console.log("Clicked 'Agree' on main page consent (pre-login)");
+                  await page.waitForTimeout(1500);
+                  modalDismissed = true;
+                }
+              }
+
               await page.waitForTimeout(500);
 
               await safeClick(
@@ -1606,6 +1663,32 @@ jobs:
               console.log("Waiting for login success bell icon");
               await page.locator('svg[data-icon="bell"]').waitFor({ state: "visible" });
               await page.screenshot({ path: "zedge-after-login.png", fullPage: true });
+
+              // ── Post-login consent iframe handler ──
+              // Consent modal may reappear after login on a new page load
+              const postLoginConsentKw = ['consent', 'cookie', 'privacy', 'cmp', 'onetrust', 'cookiebot', 'quantcast', 'sourcepoint', 'trustarc', 'didomi'];
+              for (const frame of page.frames()) {
+                try {
+                  if (frame === page.mainFrame()) continue;
+                  const fUrl = (frame.url() || '').toLowerCase();
+                  if (!fUrl || fUrl === 'about:blank') continue;
+                  if (!postLoginConsentKw.some(k => fUrl.includes(k))) continue;
+                  console.log(`Found consent iframe after login: ${frame.url()}`);
+                  const aBtn = frame.locator('button:has-text("Agree")').last();
+                  if (await aBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+                    await aBtn.click({ timeout: 5000 }).catch(() => {});
+                    console.log("Clicked 'Agree' in consent iframe (post-login)");
+                    await page.waitForTimeout(1500);
+                  }
+                } catch (e) { /* skip */ }
+              }
+              // Also check main page
+              const postLoginConsent = page.locator('[class*="consent"] button:has-text("Agree"), [class*="cookie"] button:has-text("Agree"), [id*="consent"] button:has-text("Agree")').first();
+              if (await postLoginConsent.isVisible({ timeout: 1000 }).catch(() => false)) {
+                await postLoginConsent.click({ timeout: 5000 }).catch(() => {});
+                console.log("Clicked 'Agree' on main page consent (post-login)");
+                await page.waitForTimeout(1500);
+              }
 
               // ─────────────────────────────────────────────────────────────
               // 5. UPLOAD LOOP — repeat up to remainingUploads times
