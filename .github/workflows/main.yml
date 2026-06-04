@@ -1013,6 +1013,77 @@ jobs:
             return false;
           }
 
+          // ── AUTO-KILL consent popup instantly (Playwright level) ─────
+          async function autoKillConsent(page) {
+            try {
+              // 1. Remove consent iframes
+              const frames = page.frames();
+              for (const frame of frames) {
+                try {
+                  if (frame === page.mainFrame()) continue;
+                  const url = (frame.url() || '').toLowerCase();
+                  if (!url || url === 'about:blank') continue;
+                  if (url.includes('zedge')) continue;
+                  if (url.includes('consent') || url.includes('cookie') || url.includes('privacy') || url.includes('onetrust') || url.includes('cookiebot') || url.includes('sourcepoint')) {
+                    await frame.evaluate(() => {
+                      document.documentElement.remove();
+                    }).catch(() => {});
+                    console.log(`🚫 Killed consent frame: ${url.slice(0, 60)}`);
+                  }
+                } catch (e) { /* skip */ }
+              }
+
+              // 2. Click Agree/Accept buttons on main page (non-Zedge only)
+              const consentButtons = ['Agree', 'Accept All', 'Allow All', 'I Agree', 'OK, Got it', 'Accept'];
+              for (const text of consentButtons) {
+                try {
+                  const btn = page.locator(`button:has-text("${text}")`).first();
+                  const visible = await btn.isVisible({ timeout: 500 }).catch(() => false);
+                  if (!visible) continue;
+                  // Skip Zedge workflow buttons
+                  const isZedge = await btn.evaluate(el => !!el.closest('[data-hook]')).catch(() => true);
+                  if (isZedge) continue;
+                  // Check if inside consent context
+                  const inConsent = await btn.evaluate(el => {
+                    const p = el.closest('[class*="consent"], [class*="cookie"], [class*="privacy"], [id*="consent"], [role="dialog"], [role="alertdialog"]');
+                    return !!p;
+                  }).catch(() => false);
+                  if (inConsent) {
+                    await btn.click({ timeout: 2000 }).catch(() => {});
+                    console.log(`✅ Auto-clicked consent button: ${text}`);
+                    await page.waitForTimeout(500);
+                    return true;
+                  }
+                } catch (e) { /* skip */ }
+              }
+
+              // 3. Force remove consent overlays via JS
+              await page.evaluate(() => {
+                const consentKW = ['consent management', 'cookie policy', 'privacy policy', 'we and our partners'];
+                // Remove iframes
+                document.querySelectorAll('iframe').forEach(f => {
+                  const src = (f.src || '').toLowerCase();
+                  if (!src.includes('zedge') && (src.includes('consent') || src.includes('cookie') || src.includes('privacy') || src.includes('onetrust') || src.includes('cookiebot'))) {
+                    f.remove();
+                  }
+                });
+                // Remove overlays
+                document.querySelectorAll('div, section, aside').forEach(el => {
+                  const text = (el.textContent || '').toLowerCase().slice(0, 500);
+                  if (consentKW.some(k => text.includes(k))) {
+                    if (!el.closest('[data-hook]') && !el.querySelector('[data-hook]')) {
+                      el.remove();
+                      document.body.style.overflow = '';
+                      document.documentElement.style.overflow = '';
+                    }
+                  }
+                });
+              }).catch(() => {});
+
+              return false;
+            } catch (e) { return false; }
+          }
+
           // ── Random Fingerprint Pool ────────────────────────────────
           const FP_USER_AGENTS = [
             // ── Chrome on Windows ──────────────────────────────────────
@@ -1861,16 +1932,24 @@ jobs:
                     page.locator('a:has-text("Profiles")').first(),
                     "Profiles"
                   );
+                  await page.waitForTimeout(1500);
+                  await dismissConsentIframes(page);
+                  await autoKillConsent(page);
 
                   // Click the correct rotated profile
                   await safeClick(
                     page.locator('[data-hook="profile-list"] > div').nth(currentProfileIndex),
                     `Profile Index ${currentProfileIndex}`
                   );
+                  await page.waitForTimeout(1500);
+                  await dismissConsentIframes(page);
+                  await autoKillConsent(page);
 
                   // Wait for the profile page to fully render before touching anything.
                   await page.waitForLoadState("networkidle");
                   await page.waitForTimeout(1500);
+                  await dismissConsentIframes(page);
+                  await autoKillConsent(page);
 
                   // Navigate directly to the correct content-type URL so we never need to
                   // interact with the unreliable type-selection modal.
