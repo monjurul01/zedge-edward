@@ -1016,7 +1016,7 @@ jobs:
           // ── AUTO-KILL consent popup instantly (Playwright level) ─────
           async function autoKillConsent(page) {
             try {
-              // 1. Remove consent iframes
+              // 1. Remove ALL non-Zedge iframes instantly
               const frames = page.frames();
               for (const frame of frames) {
                 try {
@@ -1024,64 +1024,133 @@ jobs:
                   const url = (frame.url() || '').toLowerCase();
                   if (!url || url === 'about:blank') continue;
                   if (url.includes('zedge')) continue;
-                  if (url.includes('consent') || url.includes('cookie') || url.includes('privacy') || url.includes('onetrust') || url.includes('cookiebot') || url.includes('sourcepoint')) {
-                    await frame.evaluate(() => {
+                  // Remove ANY non-Zedge iframe that looks like consent/overlay
+                  await frame.evaluate(() => {
+                    // Check if this iframe has consent-related content
+                    const body = document.body;
+                    if (!body) return;
+                    const text = (body.textContent || '').toLowerCase();
+                    const hasConsentText = text.includes('consent') || text.includes('cookie') || text.includes('privacy') || text.includes('agree') || text.includes('accept');
+                    const hasButtons = document.querySelectorAll('button').length > 0;
+                    if (hasConsentText || hasButtons) {
                       document.documentElement.remove();
-                    }).catch(() => {});
-                    console.log(`🚫 Killed consent frame: ${url.slice(0, 60)}`);
-                  }
+                    }
+                  }).catch(() => {});
+                  // Also remove the iframe element itself from parent
+                  await page.evaluate((frameUrl) => {
+                    document.querySelectorAll('iframe').forEach(f => {
+                      if (f.src && f.src.toLowerCase() === frameUrl) {
+                        f.remove();
+                      }
+                    });
+                  }, url).catch(() => {});
+                  console.log(`🚫 Killed frame: ${url.slice(0, 60)}`);
                 } catch (e) { /* skip */ }
               }
 
-              // 2. Click Agree/Accept buttons on main page (non-Zedge only)
-              const consentButtons = ['Agree', 'Accept All', 'Allow All', 'I Agree', 'OK, Got it', 'Accept'];
+              // 2. Click ALL visible Agree/Accept/Allow buttons (aggressive)
+              const consentButtons = ['Agree', 'Accept All', 'Allow All', 'I Agree', 'OK, Got it', 'Accept', 'OK', 'Got it', 'Allow', 'Continue'];
               for (const text of consentButtons) {
                 try {
-                  const btn = page.locator(`button:has-text("${text}")`).first();
-                  const visible = await btn.isVisible({ timeout: 500 }).catch(() => false);
-                  if (!visible) continue;
-                  // Skip Zedge workflow buttons
-                  const isZedge = await btn.evaluate(el => !!el.closest('[data-hook]')).catch(() => true);
-                  if (isZedge) continue;
-                  // Check if inside consent context
-                  const inConsent = await btn.evaluate(el => {
-                    const p = el.closest('[class*="consent"], [class*="cookie"], [class*="privacy"], [id*="consent"], [role="dialog"], [role="alertdialog"]');
-                    return !!p;
-                  }).catch(() => false);
-                  if (inConsent) {
-                    await btn.click({ timeout: 2000 }).catch(() => {});
-                    console.log(`✅ Auto-clicked consent button: ${text}`);
-                    await page.waitForTimeout(500);
-                    return true;
+                  const buttons = await page.locator(`button:has-text("${text}")`).all();
+                  for (const btn of buttons) {
+                    const visible = await btn.isVisible({ timeout: 300 }).catch(() => false);
+                    if (!visible) continue;
+                    // Skip Zedge workflow buttons
+                    const isZedge = await btn.evaluate(el => {
+                      return !!el.closest('[data-hook]') || el.closest('form');
+                    }).catch(() => true);
+                    if (isZedge) continue;
+                    // Click ANY visible button that's not part of Zedge workflow
+                    await btn.click({ timeout: 1000 }).catch(() => {});
+                    console.log(`✅ Auto-clicked: ${text}`);
+                    await page.waitForTimeout(300);
                   }
                 } catch (e) { /* skip */ }
               }
 
-              // 3. Force remove consent overlays via JS
+              // 3. Force remove ALL overlays blocking the page
               await page.evaluate(() => {
-                const consentKW = ['consent management', 'cookie policy', 'privacy policy', 'we and our partners'];
-                // Remove iframes
+                // Remove consent iframes
                 document.querySelectorAll('iframe').forEach(f => {
                   const src = (f.src || '').toLowerCase();
-                  if (!src.includes('zedge') && (src.includes('consent') || src.includes('cookie') || src.includes('privacy') || src.includes('onetrust') || src.includes('cookiebot'))) {
+                  if (!src.includes('zedge')) {
                     f.remove();
                   }
                 });
-                // Remove overlays
-                document.querySelectorAll('div, section, aside').forEach(el => {
-                  const text = (el.textContent || '').toLowerCase().slice(0, 500);
-                  if (consentKW.some(k => text.includes(k))) {
-                    if (!el.closest('[data-hook]') && !el.querySelector('[data-hook]')) {
+
+                // Remove fixed/absolute overlays (consent popups are usually fixed positioned)
+                document.querySelectorAll('div, section, aside, [role="dialog"], [role="alertdialog"]').forEach(el => {
+                  // Skip Zedge elements
+                  if (el.closest('[data-hook]') || el.querySelector('[data-hook]')) return;
+                  if (el.querySelector('input[type="file"]')) return;
+
+                  const style = window.getComputedStyle(el);
+                  const isFixed = style.position === 'fixed';
+                  const isAbsolute = style.position === 'absolute';
+                  const highZ = parseInt(style.zIndex) > 100;
+
+                  if (isFixed || (isAbsolute && highZ)) {
+                    const text = (el.textContent || '').toLowerCase();
+                    // Check if it looks like a consent popup
+                    if (text.includes('consent') || text.includes('cookie') || text.includes('privacy') ||
+                        text.includes('agree') || text.includes('accept') || text.includes('we and our partners') ||
+                        text.includes('data') || text.includes('tracking')) {
                       el.remove();
                       document.body.style.overflow = '';
                       document.documentElement.style.overflow = '';
                     }
                   }
                 });
+
+                // Remove overlays by common consent class patterns
+                document.querySelectorAll('[class*="consent"], [class*="cookie"], [class*="privacy"], [class*="banner"], [class*="notice"], [class*="modal"]:not([data-hook]), [class*="popup"]').forEach(el => {
+                  if (el.closest('[data-hook]') || el.querySelector('[data-hook]')) return;
+                  if (el.querySelector('input[type="file"]')) return;
+                  el.remove();
+                  document.body.style.overflow = '';
+                  document.documentElement.style.overflow = '';
+                });
+
+                // Remove overlays by ID patterns
+                document.querySelectorAll('[id*="consent"], [id*="cookie"], [id*="privacy"], [id*="onetrust"], [id*="cookiebot"]').forEach(el => {
+                  if (el.closest('[data-hook]')) return;
+                  el.remove();
+                  document.body.style.overflow = '';
+                  document.documentElement.style.overflow = '';
+                });
+
+                // Restore scroll if blocked
+                document.body.style.overflow = '';
+                document.documentElement.style.overflow = '';
               }).catch(() => {});
 
               return false;
             } catch (e) { return false; }
+          }
+
+          // ── WAIT for consent to be dismissed before continuing ─────
+          async function waitForConsentClear(page, maxWait = 5000) {
+            const start = Date.now();
+            while (Date.now() - start < maxWait) {
+              await autoKillConsent(page);
+              // Check if any consent overlay is still visible
+              const hasConsent = await page.evaluate(() => {
+                const iframes = document.querySelectorAll('iframe');
+                for (const f of iframes) {
+                  if (!f.src.includes('zedge')) return true;
+                }
+                const overlays = document.querySelectorAll('[class*="consent"], [class*="cookie"], [class*="privacy"]');
+                for (const o of overlays) {
+                  if (o.closest('[data-hook]')) continue;
+                  if (window.getComputedStyle(o).display !== 'none') return true;
+                }
+                return false;
+              }).catch(() => false);
+              if (!hasConsent) return true;
+              await page.waitForTimeout(300);
+            }
+            return false;
           }
 
           // ── Random Fingerprint Pool ────────────────────────────────
@@ -1904,6 +1973,11 @@ jobs:
               // ─────────────────────────────────────────────────────────────
               let successCount = 0;
 
+              // ── Continuous consent blocker — runs every 2 seconds during upload loop ──
+              const consentBlocker = setInterval(async () => {
+                try { await autoKillConsent(page); } catch (e) {}
+              }, 2000);
+
               for (let i = 0; i < remainingUploads; i++) {
                 let queueItem = null;
                 const uploadNum = i + 1;
@@ -1925,29 +1999,31 @@ jobs:
                   console.log("Navigating to Zedge upload portal");
                   await page.goto("https://upload.zedge.net", { waitUntil: "domcontentloaded" });
                   await page.waitForLoadState("networkidle");
-                  await dismissConsentIframes(page);
+                  await waitForConsentClear(page);
 
                   // Click Profiles tab
+                  console.log("Clicking Profiles tab");
                   await safeClick(
                     page.locator('a:has-text("Profiles")').first(),
                     "Profiles"
                   );
-                  await page.waitForTimeout(1500);
-                  await dismissConsentIframes(page);
-                  await autoKillConsent(page);
+                  // Wait and clear any consent popup that appears after Profiles click
+                  await page.waitForTimeout(2000);
+                  await waitForConsentClear(page, 8000);
 
                   // Click the correct rotated profile
+                  console.log("Clicking profile index: " + currentProfileIndex);
                   await safeClick(
                     page.locator('[data-hook="profile-list"] > div').nth(currentProfileIndex),
                     `Profile Index ${currentProfileIndex}`
                   );
-                  await page.waitForTimeout(1500);
-                  await dismissConsentIframes(page);
-                  await autoKillConsent(page);
+                  await page.waitForTimeout(2000);
+                  await waitForConsentClear(page, 8000);
 
                   // Wait for the profile page to fully render before touching anything.
                   await page.waitForLoadState("networkidle");
                   await page.waitForTimeout(1500);
+                  await waitForConsentClear(page);
                   await dismissConsentIframes(page);
                   await autoKillConsent(page);
 
@@ -1962,7 +2038,7 @@ jobs:
                   await page.goto(targetContentUrl, { waitUntil: "domcontentloaded" });
                   await page.waitForLoadState("networkidle");
                   await page.waitForTimeout(1000);
-                  await dismissConsentIframes(page);
+                  await autoKillConsent(page);
 
                   // Click the Upload (+) button — now already on the right content-type page
                   await safeClick(
@@ -1972,6 +2048,7 @@ jobs:
 
                   // Wait for upload dialog to appear
                   await page.waitForTimeout(800);
+                  await autoKillConsent(page);
                   await page.screenshot({ path: `zedge-upload-menu-${uploadNum}.png`, fullPage: false });
 
                   // Upload the file
@@ -1984,9 +2061,11 @@ jobs:
                     category:    queueItem.category,
                     description: queueItem.description
                   });
+                  await autoKillConsent(page);
 
                   // Check publish status — returns {removed, statusName} instead of throwing
                   const publishResult = await verifyPublishStatus(page);
+                  await autoKillConsent(page);
 
                   await page.screenshot({ path: `zedge-final-${uploadNum}.png`, fullPage: true });
 
@@ -2047,6 +2126,7 @@ jobs:
 
               console.log(`\n🏁 Run complete. ${successCount} upload(s) succeeded.`);
 
+              clearInterval(consentBlocker);
               await context.close();
               await browser.close();
 
