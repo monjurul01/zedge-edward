@@ -939,26 +939,38 @@ jobs:
                   // Skip Zedge's own frames — never interfere with them
                   if (url.includes('zedge.net') || url.includes('zedge')) continue;
 
-                  // Try "Agree" button
-                  const agreeBtn = frame.locator('button:has-text("Agree")').last();
-                  if (await agreeBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
-                    await agreeBtn.click({ timeout: 5000 }).catch(() => {});
-                    console.log("Clicked 'Agree' in frame: " + frame.url());
-                    await page.waitForTimeout(1500);
-                    return true;
-                  }
+                  const dismissTexts = [
+                    'Agree',
+                    'Accept',
+                    'Accept All',
+                    'Allow',
+                    'Allow All',
+                    'Continue',
+                    'Close',
+                    'Dismiss',
+                    'Got it',
+                    'OK',
+                    'Not now',
+                    'No thanks',
+                    'Skip'
+                  ];
 
-                  // Try "Accept" button
-                  const acceptBtn = frame.locator('button:has-text("Accept")').last();
-                  if (await acceptBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-                    await acceptBtn.click({ timeout: 5000 }).catch(() => {});
-                    console.log("Clicked 'Accept' in frame: " + frame.url());
-                    await page.waitForTimeout(1500);
-                    return true;
+                  for (const text of dismissTexts) {
+                    const btn = frame.locator(`button:has-text("${text}")`).last();
+                    if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+                      await btn.click({ timeout: 5000 }).catch(() => {});
+                      console.log(`Clicked '${text}' in frame: ` + frame.url());
+                      await page.waitForTimeout(1500);
+                      return true;
+                    }
                   }
 
                   // Try close (X) button
-                  const closeBtn = frame.locator('[aria-label*="close" i], [title*="close" i]').first();
+                  const closeBtn = frame.locator(
+                    'button[aria-label*="close" i], button[title*="close" i], ' +
+                    '[role="button"][aria-label*="close" i], [role="button"][title*="close" i], ' +
+                    '[aria-label*="close" i], [title*="close" i]'
+                  ).first();
                   if (await closeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
                     await closeBtn.click({ timeout: 5000 }).catch(() => {});
                     console.log("Clicked close in frame: " + frame.url());
@@ -970,22 +982,54 @@ jobs:
               if (attempt < 2) await page.waitForTimeout(2000);
             }
 
-            // Fallback: check main page for ANY visible "Agree" element (broad search)
+            // Fallback: check main page for common dismiss/close labels
             // The consent modal may render directly on the page (not in an iframe)
             // with custom classes that don't contain "consent"/"cookie".
             try {
-              const agreeEls = await page.locator('text=Agree').all();
-              for (let i = agreeEls.length - 1; i >= 0; i--) {
-                const el = agreeEls[i];
-                const visible = await el.isVisible().catch(() => false);
-                if (!visible) continue;
-                // Skip if inside Zedge workflow element
-                const isWorkflow = await el.evaluate(e => !!e.closest('[data-hook]')).catch(() => true);
-                if (isWorkflow) continue;
-                await el.click({ timeout: 5000 }).catch(() => {});
-                console.log("Clicked 'Agree' element on main page (broad match)");
-                await page.waitForTimeout(1500);
-                return true;
+              const dismissTexts = [
+                'Agree',
+                'Accept',
+                'Accept All',
+                'Allow',
+                'Allow All',
+                'Continue',
+                'Close',
+                'Dismiss',
+                'Got it',
+                'OK',
+                'Not now',
+                'No thanks',
+                'Skip'
+              ];
+              for (const text of dismissTexts) {
+                const els = await page.locator(`text=${text}`).all();
+                for (let i = els.length - 1; i >= 0; i--) {
+                  const el = els[i];
+                  const visible = await el.isVisible().catch(() => false);
+                  if (!visible) continue;
+                  // Skip if inside Zedge workflow element
+                  const isWorkflow = await el.evaluate(e => !!e.closest('[data-hook]')).catch(() => true);
+                  if (isWorkflow) continue;
+                  await el.click({ timeout: 5000 }).catch(() => {});
+                  console.log(`Clicked '${text}' element on main page (broad match)`);
+                  await page.waitForTimeout(1500);
+                  return true;
+                }
+              }
+
+              const closeBtn = page.locator(
+                'button[aria-label*="close" i], button[title*="close" i], ' +
+                '[role="button"][aria-label*="close" i], [role="button"][title*="close" i], ' +
+                '[aria-label*="close" i], [title*="close" i]'
+              ).first();
+              if (await closeBtn.isVisible().catch(() => false)) {
+                const isWorkflow = await closeBtn.evaluate(e => !!e.closest('[data-hook]')).catch(() => true);
+                if (!isWorkflow) {
+                  await closeBtn.click({ timeout: 5000 }).catch(() => {});
+                  console.log("Clicked close element on main page");
+                  await page.waitForTimeout(1500);
+                  return true;
+                }
               }
             } catch (e) { /* skip */ }
 
@@ -1048,8 +1092,24 @@ jobs:
                 } catch (e) { /* skip */ }
               }
 
-              // 2. Click ALL visible Agree/Accept/Allow buttons (aggressive)
-              const consentButtons = ['Agree', 'Accept All', 'Allow All', 'I Agree', 'OK, Got it', 'Accept', 'OK', 'Got it', 'Allow', 'Continue'];
+              // 2. Click ALL visible Agree/Accept/Allow/Close buttons (aggressive)
+              const consentButtons = [
+                'Agree',
+                'Accept All',
+                'Allow All',
+                'I Agree',
+                'OK, Got it',
+                'Accept',
+                'OK',
+                'Got it',
+                'Allow',
+                'Continue',
+                'Close',
+                'Dismiss',
+                'Not now',
+                'No thanks',
+                'Skip'
+              ];
               for (const text of consentButtons) {
                 try {
                   const buttons = await page.locator(`button:has-text("${text}")`).all();
@@ -1068,6 +1128,61 @@ jobs:
                   }
                 } catch (e) { /* skip */ }
               }
+
+              try {
+                const closeButtons = await page.locator(
+                  'button[aria-label*="close" i], button[title*="close" i], ' +
+                  '[role="button"][aria-label*="close" i], [role="button"][title*="close" i], ' +
+                  '[aria-label*="close" i], [title*="close" i]'
+                ).all();
+                for (const btn of closeButtons) {
+                  const visible = await btn.isVisible({ timeout: 300 }).catch(() => false);
+                  if (!visible) continue;
+                  const isZedge = await btn.evaluate(el => {
+                    const workflowWords = [
+                      'upload ringtones',
+                      'upload',
+                      'edit meta',
+                      'edit metadata',
+                      'metadata',
+                      'profile',
+                      'profiles',
+                      'content type',
+                      'wallpaper',
+                      'ringtone',
+                      'audio',
+                      'file',
+                      'title',
+                      'tags',
+                      'category',
+                      'description',
+                      'drag and drop or browse',
+                      'we accept only mp3 files',
+                      'we accept only mp3 files and max 8 mb',
+                      'max 8 mb'
+                    ];
+                    let cur = el;
+                    for (let i = 0; i < 8 && cur; i++) {
+                      const text = (cur.textContent || '').toLowerCase();
+                      const cls = (cur.className || '').toString().toLowerCase();
+                      if (
+                        !!cur.closest?.('[data-hook]') ||
+                        !!cur.querySelector?.('input[type="file"], input[type="email"], input[type="password"], button[type="submit"]') ||
+                        workflowWords.some(k => text.includes(k)) ||
+                        /upload|edit meta|edit metadata|metadata|profile|profiles|content type|wallpaper|ringtone|audio|file|title|tags|category|description|drag and drop or browse|max 8 mb/.test(text + ' ' + cls)
+                      ) {
+                        return true;
+                      }
+                      cur = cur.parentElement;
+                    }
+                    return false;
+                  }).catch(() => true);
+                  if (isZedge) continue;
+                  await btn.click({ timeout: 1000 }).catch(() => {});
+                  console.log('✅ Auto-clicked close icon');
+                  await page.waitForTimeout(300);
+                }
+              } catch (e) { /* skip */ }
 
               // 3. Force remove ALL overlays blocking the page
               await page.evaluate(() => {
@@ -1134,16 +1249,54 @@ jobs:
             const start = Date.now();
             while (Date.now() - start < maxWait) {
               await autoKillConsent(page);
-              // Check if any consent overlay is still visible
+              // Check if any consent/close-style overlay is still visible
               const hasConsent = await page.evaluate(() => {
+                const isVisible = (el) => {
+                  if (!el) return false;
+                  const style = window.getComputedStyle(el);
+                  if (!style || style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                  const rect = el.getBoundingClientRect();
+                  return rect.width > 40 && rect.height > 40;
+                };
+                const looksBlocking = (el) => {
+                  if (!el) return false;
+                  if (el.closest('[data-hook]')) return false;
+                  if (!isVisible(el)) return false;
+                  const style = window.getComputedStyle(el);
+                  const isFixed = style.position === 'fixed';
+                  const isAbsolute = style.position === 'absolute';
+                  const highZ = parseInt(style.zIndex || '0', 10) > 100;
+                  const isDialog = el.matches('[role="dialog"], [role="alertdialog"]');
+                  if (!(isFixed || (isAbsolute && highZ) || isDialog)) return false;
+                  const text = (el.textContent || '').toLowerCase();
+                  return [
+                    'consent',
+                    'cookie',
+                    'privacy',
+                    'agree',
+                    'accept',
+                    'allow',
+                    'close',
+                    'dismiss',
+                    'not now',
+                    'no thanks',
+                    'skip',
+                    'got it'
+                  ].some(k => text.includes(k));
+                };
+
                 const iframes = document.querySelectorAll('iframe');
                 for (const f of iframes) {
                   if (!f.src.includes('zedge')) return true;
                 }
-                const overlays = document.querySelectorAll('[class*="consent"], [class*="cookie"], [class*="privacy"]');
+                const overlays = document.querySelectorAll(
+                  '[role="dialog"], [role="alertdialog"], ' +
+                  '[class*="consent"], [class*="cookie"], [class*="privacy"], ' +
+                  '[class*="modal"], [class*="popup"], [class*="overlay"], ' +
+                  '[class*="banner"], [class*="notice"]'
+                );
                 for (const o of overlays) {
-                  if (o.closest('[data-hook]')) continue;
-                  if (window.getComputedStyle(o).display !== 'none') return true;
+                  if (looksBlocking(o)) return true;
                 }
                 return false;
               }).catch(() => false);
@@ -1669,11 +1822,227 @@ jobs:
                 renderer: fpRenderer
               });
 
+              await context.addInitScript(() => {
+                (() => {
+                  if (window.__genericPopupKillerInstalled) return;
+                  window.__genericPopupKillerInstalled = true;
+
+                  const isZedgeUI = (el) => {
+                    if (!el) return false;
+                    if (el.closest && el.closest('[data-hook]')) return true;
+                    if (el.querySelector && el.querySelector('[data-hook]')) return true;
+                    if (el.querySelector && el.querySelector('input[type="file"], input[type="email"], input[type="password"]')) return true;
+                    if (el.querySelector && el.querySelector('button[type="submit"]')) return true;
+                    return false;
+                  };
+
+                  const isZedgeOwnedModal = (el) => {
+                    if (!el || isZedgeUI(el)) return true;
+                    const root = el.querySelector ? el : el.closest?.('dialog, [role="dialog"], [role="alertdialog"], [class*="modal"], [class*="popup"], [class*="overlay"]');
+                    const scope = root || el;
+                    if (!scope || !scope.querySelector) return false;
+                    const text = (scope.textContent || '').toLowerCase();
+                    const hasWorkflowWords = [
+                      'upload ringtones',
+                      'upload',
+                      'edit meta',
+                      'edit metadata',
+                      'metadata',
+                      'profile',
+                      'profiles',
+                      'content type',
+                      'wallpaper',
+                      'ringtone',
+                      'audio',
+                      'file',
+                      'title',
+                      'tags',
+                      'category',
+                      'description',
+                      'drag and drop or browse',
+                      'we accept only mp3 files',
+                      'we accept only mp3 files and max 8 mb',
+                      'max 8 mb'
+                    ].some(k => text.includes(k));
+                    const hasWorkflowControls = !!scope.querySelector(
+                      'form, input, textarea, select, button[type="submit"], button[data-hook], ' +
+                      'input[type="file"], input[type="email"], input[type="password"], ' +
+                      '.react-select__input, .react-select, [data-hook*="form"], [data-hook*="meta"], [data-hook*="profile"], [data-hook*="upload"]'
+                    );
+                    return hasWorkflowWords || hasWorkflowControls;
+                  };
+
+                  const isInsideZedgeOwnedModal = (el) => {
+                    let cur = el;
+                    for (let i = 0; i < 8 && cur; i++) {
+                      if (isZedgeOwnedModal(cur)) return true;
+                      cur = cur.parentElement;
+                    }
+                    return false;
+                  };
+
+                  const describeNode = (el) => {
+                    if (!el) return 'unknown';
+                    const tag = (el.tagName || '').toLowerCase();
+                    const id = (el.id || '').toString().trim();
+                    const cls = (el.className || '').toString().trim().replace(/\s+/g, '.');
+                    const role = (el.getAttribute && el.getAttribute('role')) || '';
+                    return `${tag}${id ? `#${id}` : ''}${cls ? `.${cls}` : ''}${role ? `[role="${role}"]` : ''}`;
+                  };
+
+                  const isVisible = (el) => {
+                    if (!el || !el.isConnected) return false;
+                    const style = window.getComputedStyle(el);
+                    if (!style || style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 30 && rect.height > 30;
+                  };
+
+                  const looksLikePopup = (el) => {
+                    if (!el || isZedgeUI(el) || !isVisible(el)) return false;
+                    const style = window.getComputedStyle(el);
+                    const z = parseInt(style.zIndex || '0', 10) || 0;
+                    const isFixed = style.position === 'fixed';
+                    const isAbsolute = style.position === 'absolute';
+                    const isDialog = el.matches('[role="dialog"], [role="alertdialog"], dialog[open]');
+                    const hasPopupClass = /modal|popup|overlay|dialog|banner|notice|cookie|consent|privacy/i.test(
+                      `${el.className || ''} ${el.id || ''}`
+                    );
+                    const text = (el.textContent || '').toLowerCase();
+                    const consentPhrases = [
+                      'consent management',
+                      'we and our partners place cookies',
+                      'you may accept all or part of these operations',
+                      'privacy policy',
+                      'manage consent',
+                      'your privacy choices'
+                    ];
+                    const hasDismissText = [
+                      'close',
+                      'dismiss',
+                      'not now',
+                      'no thanks',
+                      'skip',
+                      'got it',
+                      'accept',
+                      'agree',
+                      'allow',
+                      'disagree'
+                    ].some(k => text.includes(k));
+                    const hasConsentPhrase = consentPhrases.some(k => text.includes(k));
+                    return isDialog || hasPopupClass || (isFixed && z >= 50) || (isAbsolute && z >= 50) || hasDismissText || hasConsentPhrase;
+                  };
+
+                  const clickCloseButtons = (root) => {
+                    const buttons = root.querySelectorAll ? root.querySelectorAll('button, [role="button"]') : [];
+                    buttons.forEach(btn => {
+                      if (isInsideZedgeOwnedModal(btn) || btn.closest?.('[data-hook]') || !isVisible(btn)) return;
+                      const label = ((btn.textContent || '') + ' ' + (btn.getAttribute('aria-label') || '') + ' ' + (btn.getAttribute('title') || '')).toLowerCase();
+                      const classes = `${btn.className || ''} ${btn.id || ''}`.toLowerCase();
+                      if (!/close|dismiss|not now|no thanks|skip|got it/.test(label + ' ' + classes)) return;
+                      try { btn.click(); } catch (e) {}
+                    });
+                  };
+
+                  const collectDeepElements = (root) => {
+                    const results = [];
+                    const visit = (node) => {
+                      if (!node || !node.children) return;
+                      for (const child of Array.from(node.children)) {
+                        results.push(child);
+                        if (child.shadowRoot) visit(child.shadowRoot);
+                        visit(child);
+                      }
+                    };
+                    visit(root);
+                    return results;
+                  };
+
+                  const getPopupRoot = (el) => {
+                    let cur = el;
+                    for (let i = 0; i < 8 && cur; i++) {
+                      const cls = `${cur.className || ''} ${cur.id || ''}`.toLowerCase();
+                      if (cur.matches && cur.matches('[role="dialog"], [role="alertdialog"], dialog[open]')) return cur;
+                      if (/modal|popup|overlay|dialog|banner|notice|cookie|consent|privacy/.test(cls)) return cur;
+                      cur = cur.parentElement;
+                    }
+                    return el;
+                  };
+
+                  const kill = () => {
+                    try {
+                      clickCloseButtons(document);
+
+                      collectDeepElements(document.documentElement).filter(el => {
+                        const tag = (el.tagName || '').toLowerCase();
+                        const cls = `${el.className || ''} ${el.id || ''}`.toLowerCase();
+                        return tag === 'iframe' ||
+                          el.matches?.('[role="dialog"], [role="alertdialog"], dialog[open]') ||
+                          /modal|popup|overlay|banner|notice|cookie|consent|privacy|dialog/.test(cls);
+                      }).forEach(el => {
+                        if (isZedgeOwnedModal(el)) {
+                          console.log(`↷ Skip Zedge-owned modal: ${describeNode(el)}`);
+                          return;
+                        }
+                        if ((el.tagName || '').toLowerCase() === 'iframe') {
+                          const src = (el.src || '').toLowerCase();
+                          if (src.includes('zedge')) return;
+                        }
+                        if (looksLikePopup(el)) {
+                          const root = getPopupRoot(el);
+                          clickCloseButtons(root);
+                          console.log(`🧹 Removed popup root: ${describeNode(root)}`);
+                          root.remove();
+                        }
+                      });
+
+                      document.querySelectorAll(
+                        'iframe, [role="dialog"], [role="alertdialog"], dialog[open], ' +
+                        '[class*="modal"], [class*="popup"], [class*="overlay"], ' +
+                        '[class*="banner"], [class*="notice"], [class*="cookie"], [class*="consent"], [class*="privacy"]'
+                      ).forEach(el => {
+                        if (isZedgeOwnedModal(el)) {
+                          console.log(`↷ Skip Zedge-owned modal: ${describeNode(el)}`);
+                          return;
+                        }
+                        if (el.tagName === 'IFRAME') {
+                          const src = (el.src || '').toLowerCase();
+                          if (src.includes('zedge')) return;
+                        }
+                        if (looksLikePopup(el)) {
+                          const root = getPopupRoot(el);
+                          clickCloseButtons(root);
+                          console.log(`🧹 Removed popup root: ${describeNode(root)}`);
+                          root.remove();
+                        }
+                      });
+
+                      document.body && (document.body.style.overflow = '');
+                      document.documentElement && (document.documentElement.style.overflow = '');
+                    } catch (e) {}
+                  };
+
+                  const start = () => {
+                    kill();
+                    const observer = new MutationObserver(() => kill());
+                    observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+                    setInterval(kill, 500);
+                  };
+
+                  if (document.documentElement) {
+                    start();
+                  } else {
+                    document.addEventListener('DOMContentLoaded', start, { once: true });
+                  }
+                })();
+              });
+
               const page = await context.newPage();
 
               await page.setExtraHTTPHeaders({
                 "Accept-Language": "en-US,en;q=0.9"
               });
+              page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
 
               // 3. BrowserLeaks check ONCE
               console.log("Opening BrowserLeaks");
@@ -1706,7 +2075,6 @@ jobs:
               const killerMaxWait = 8000; // 8 seconds max wait
 
               const modalSelectors = [
-                'button:has-text("Close")',
                 'button:has-text("Do not Share or Sell my Personal Information")',
                 'button:has-text("Accept All Cookies")',
                 'button:has-text("Accept All")',
@@ -1716,8 +2084,6 @@ jobs:
                 'button:has-text("OK")',
                 'button:has-text("Got it")',
                 'button:has-text("Dismiss")',
-                '[role="dialog"] button:has-text("Close")',
-                '[role="alertdialog"] button:has-text("Close")',
               ];
 
               while (Date.now() - killerStart < killerMaxWait) {
