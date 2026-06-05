@@ -1104,7 +1104,6 @@ jobs:
                 'Got it',
                 'Allow',
                 'Continue',
-                'Close',
                 'Dismiss',
                 'Not now',
                 'No thanks',
@@ -2367,12 +2366,31 @@ jobs:
                   await page.waitForLoadState("networkidle");
                   await waitForConsentClear(page);
 
-                  // Click Profiles tab
+                  // Click Profiles tab — try multiple selectors with fallback
                   console.log("Clicking Profiles tab");
-                  await safeClick(
-                    page.locator('a:has-text("Profiles")').first(),
-                    "Profiles"
-                  );
+                  const profilesSelectors = [
+                    'a:has-text("Profiles")',
+                    'text=Profiles',
+                    '[role="tab"]:has-text("Profiles")',
+                    'a[href*="profile"]',
+                    'button:has-text("Profiles")',
+                  ];
+                  let profilesClicked = false;
+                  for (const sel of profilesSelectors) {
+                    try {
+                      const el = page.locator(sel).first();
+                      if (await el.isVisible({ timeout: 8000 })) {
+                        await el.click();
+                        console.log(`Clicked Profiles via: ${sel}`);
+                        profilesClicked = true;
+                        break;
+                      }
+                    } catch (e) { /* try next selector */ }
+                  }
+                  if (!profilesClicked) {
+                    await page.screenshot({ path: "profiles-not-found.png", fullPage: true });
+                    throw new Error("Profiles tab not found after trying all selectors. Check profiles-not-found.png");
+                  }
                   // Wait and clear any consent popup that appears after Profiles click
                   await page.waitForTimeout(2000);
                   await waitForConsentClear(page, 8000);
