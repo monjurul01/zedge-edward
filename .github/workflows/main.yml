@@ -438,16 +438,35 @@ jobs:
           }
           // ----------------------------------------
 
+          function getDayTypeToday() {
+            const SCHEDULE_START = parseInt(process.env.SCHEDULE_START || "0", 10);
+            if (!SCHEDULE_START) return null;
+            const diff = Math.floor((Date.now() - SCHEDULE_START) / 86400000) + 1;
+            return diff % 2 === 1 ? "ringtone" : "wallpaper";
+          }
+
           async function getNextWallpaperFromRealtimeDB() {
             console.log("Checking Firebase Realtime Database queue...");
             const data = await firebaseGet(queuePath);
             if (!data) throw new Error("No items found in Realtime Database");
 
+            const dayType = getDayTypeToday();
+            console.log(`Today is Day type: ${dayType || "any (no schedule set)"}`);
+
             const entries = Object.entries(data)
-              .filter(([id, item]) => item && item.status === "queued" && (item.fileBase64 || item.imageBase64))
+              .filter(([id, item]) => {
+                if (!item || item.status !== "queued") return false;
+                if (!item.fileBase64 && !item.imageBase64) return false;
+                if (dayType) {
+                  const isMp3 = item.isMp3 || (item.name && item.name.toLowerCase().endsWith(".mp3"));
+                  const itemType = isMp3 ? "ringtone" : "wallpaper";
+                  if (itemType !== dayType) return false;
+                }
+                return true;
+              })
               .sort((a, b) => (a[1].createdAt || 0) - (b[1].createdAt || 0));
 
-            if (!entries.length) throw new Error("No queued item found");
+            if (!entries.length) throw new Error(`No queued ${dayType || "item"} found`);
 
             const [id, item] = entries[0];
             const localDir = path.join(process.cwd(), "downloads");
@@ -482,8 +501,23 @@ jobs:
             };
           }
 
-          async function markWallpaperDoneAndDelete(id, name) {
-            console.log(`Upload successful — deleting "${name}" from Firebase...`);
+          async function markWallpaperDoneAndDelete(id, name, itemType) {
+            console.log(`Upload successful — recording & deleting "${name}"...`);
+
+            const histPath = "scheduleHistory";
+            const histEntry = {
+              title: name,
+              type: itemType || "wallpaper",
+              count: 1,
+              timestamp: Date.now()
+            };
+            await fetch(`${firebaseDatabaseURL}/${histPath}.json`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(histEntry)
+            });
+            console.log(`History recorded: "${name}" [${itemType}]`);
+
             await firebaseDelete(`${queuePath}/${id}`);
             console.log(`"${name}" permanently removed from Firebase queue`);
           }
@@ -2544,7 +2578,8 @@ jobs:
                   // Always delete from Firebase queue and count the upload on the profile,
                   // regardless of whether it was PUBLISHED or removed (PENDING/IN REVIEW/REJECTED).
                   // Only a true technical error (catch block) skips this.
-                  await markWallpaperDoneAndDelete(queueItem.id, queueItem.name);
+                  const uploadedType = queueItem.isMp3 ? "ringtone" : "wallpaper";
+                  await markWallpaperDoneAndDelete(queueItem.id, queueItem.name, uploadedType);
                   await updateProfileStateAfterUpload(currentState, currentProfileIndex);
 
                   // Advance local state for next iteration
@@ -2651,9 +2686,10 @@ jobs:
           HEADLESS: ${{ github.event.inputs.headless }}
           TOTAL_PROFILES: ${{ github.event.inputs.total_profiles }}
           UA_GROUP: ${{ github.event.inputs.ua_group }}
-          FOLDER_NAME: "Edward"
+          FOLDER_NAME: "EdWard Bales"
           FB_APIKEY: ${{ secrets.FB_APIKEY || 'tXFKSuTupqKZhmRL' }}
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+          SCHEDULE_START: "1781524800000"
         run: node bot.js
 
       - name: Upload artifacts
