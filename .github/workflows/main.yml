@@ -46,7 +46,7 @@ on:
 
 jobs:
   automation:
-    runs-on: ${{ inputs.os }}
+    runs-on: ${{ inputs.os || 'windows-latest' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -463,7 +463,7 @@ jobs:
             const entries = Object.entries(data)
               .filter(([id, item]) => {
                 if (!item || item.status !== "queued") return false;
-                if (!(item.fileBase64 || item.imageBase64)) return false;
+                if (!(item.fileBase64 || item.imageBase64 || item.imageUrl)) return false;
                 if (!todayType) return true;
                 const isMp3 = item.isMp3 || (item.name && item.name.toLowerCase().endsWith(".mp3"));
                 const itemType = isMp3 ? "ringtone" : "wallpaper";
@@ -482,12 +482,41 @@ jobs:
             const localFile = path.join(localDir, `${id}${ext}`);
 
             console.log(`Saving queued item: ${item.name || id} as ${ext}`);
-            const base64Data = item.fileBase64 || item.imageBase64;
-            const base64 = base64Data.includes(",")
-              ? base64Data.split(",")[1]
-              : base64Data;
 
-            fs.writeFileSync(localFile, Buffer.from(base64, "base64"));
+            if (item.fileBase64 || item.imageBase64) {
+              const base64Data = item.fileBase64 || item.imageBase64;
+              const base64 = base64Data.includes(",")
+                ? base64Data.split(",")[1]
+                : base64Data;
+              fs.writeFileSync(localFile, Buffer.from(base64, "base64"));
+            } else if (item.imageUrl) {
+              console.log(`Downloading from imageUrl: ${item.imageUrl}`);
+              const https = require("https");
+              const http = require("http");
+              const fetchUrl = item.imageUrl;
+              await new Promise((resolve, reject) => {
+                const client = fetchUrl.startsWith("https") ? https : http;
+                client.get(fetchUrl, (res) => {
+                  if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    const redirect = res.headers.location;
+                    const redirClient = redirect.startsWith("https") ? https : http;
+                    redirClient.get(redirect, (res2) => {
+                      const chunks = [];
+                      res2.on("data", c => chunks.push(c));
+                      res2.on("end", () => { fs.writeFileSync(localFile, Buffer.concat(chunks)); resolve(); });
+                      res2.on("error", reject);
+                    }).on("error", reject);
+                  } else {
+                    const chunks = [];
+                    res.on("data", c => chunks.push(c));
+                    res.on("end", () => { fs.writeFileSync(localFile, Buffer.concat(chunks)); resolve(); });
+                    res.on("error", reject);
+                  }
+                }).on("error", reject);
+              });
+            } else {
+              throw new Error("No file data (fileBase64, imageBase64, or imageUrl) found");
+            }
 
             await firebasePatch(`${queuePath}/${id}`, {
               status: "processing",
@@ -2675,7 +2704,7 @@ jobs:
           HEADLESS: ${{ github.event.inputs.headless }}
           TOTAL_PROFILES: ${{ github.event.inputs.total_profiles }}
           UA_GROUP: ${{ github.event.inputs.ua_group }}
-          FOLDER_NAME: "Edward"
+          FOLDER_NAME: "Ryan"
           FB_APIKEY: ${{ secrets.FB_APIKEY || 'tXFKSuTupqKZhmRL' }}
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
         run: node bot.js
