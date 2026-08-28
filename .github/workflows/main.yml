@@ -329,6 +329,63 @@ jobs:
             }
           }
 
+          async function sendTelegramMessage(message) {
+            const token = process.env.TELEGRAM_BOT_TOKEN || "";
+            const chatId = process.env.TELEGRAM_CHAT_ID || "";
+            if (!token || !chatId) return false;
+            try {
+              const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: chatId, text: message })
+              });
+              if (!res.ok) {
+                console.log(`Telegram API response failed: HTTP ${res.status}`);
+                return false;
+              }
+              console.log("Telegram notification successfully sent.");
+              return true;
+            } catch (err) {
+              console.log(`Error sending Telegram notification: ${err.message}`);
+              return false;
+            }
+          }
+
+          // Telegram Bot API can send the actual video file directly (up to 50 MB)
+          async function sendTelegramVideo(videoBuffer, fileName, caption) {
+            const token = process.env.TELEGRAM_BOT_TOKEN || "";
+            const chatId = process.env.TELEGRAM_CHAT_ID || "";
+            if (!token || !chatId) return false;
+            try {
+              const form = new FormData();
+              form.append("chat_id", chatId);
+              form.append("caption", caption);
+              form.append("video", new Blob([videoBuffer], { type: "video/webm" }), fileName);
+              const res = await fetch(`https://api.telegram.org/bot${token}/sendVideo`, {
+                method: "POST",
+                body: form
+              });
+              if (!res.ok) {
+                const errBody = await res.text().catch(() => "");
+                console.log(`Telegram video send failed: HTTP ${res.status} ${errBody}`);
+                return false;
+              }
+              console.log("Telegram video successfully sent.");
+              return true;
+            } catch (err) {
+              console.log(`Error sending Telegram video: ${err.message}`);
+              return false;
+            }
+          }
+
+          // Prefer Telegram; fall back to Facebook (CallMeBot) if Telegram is not configured or fails
+          async function sendNotification(message) {
+            const sentViaTelegram = await sendTelegramMessage(message);
+            if (!sentViaTelegram) {
+              await sendFacebookNotification(message);
+            }
+          }
+
           // --- PROFILE ROTATION STATE MANAGER ---
 
           function getNextAvailableProfile(lastUsedIndex, uploadCounts, total, perProfileLimit) {
@@ -402,7 +459,8 @@ jobs:
               totalUploadsToday: state.totalUploadsToday + 1,
               lastUsedProfileIndex: usedProfileIndex,
               totalProfilesAvailable: state.totalProfilesAvailable,
-              profileUploadCounts
+              profileUploadCounts,
+              uploadDayType: getDayTypeToday() === "ringtone" ? "AUDIO" : "WALLPAPER"
             });
           }
 
@@ -2379,15 +2437,17 @@ jobs:
                   successCount++;
 
                   const folderLabel = process.env.FOLDER_NAME || "Zedge Bot";
+                  const dayLabel = getDayTypeToday() === "ringtone" ? "🎵 Ringtone Day" : "🖼️ Wallpaper Day";
+                  const dhakaTime = new Date().toLocaleString("en-GB", { timeZone: "Asia/Dhaka", hour12: true });
                   let notifyMsg = "";
                   if (publishResult.removed) {
-                    notifyMsg = `⚠️ [${folderLabel}] Zedge Upload Alert!\n\nFile: ${queueItem.name}\nTitle: ${queueItem.title || "N/A"}\nCategory: ${queueItem.category || "N/A"}\nStatus: ${publishResult.statusName}\nProfile Index: ${currentProfileIndex}\n\nNotice: This item has been auto-removed from Zedge.`;
+                    notifyMsg = `⚠️ [${folderLabel}] Zedge Upload Alert!\n\n📅 ${dayLabel}\n🕐 ${dhakaTime} (Dhaka)\n\nFile: ${queueItem.name}\nTitle: ${queueItem.title || "N/A"}\nCategory: ${queueItem.category || "N/A"}\nStatus: ${publishResult.statusName}\nProfile Index: ${currentProfileIndex}\n📊 Today: ${currentState.totalUploadsToday}/${ZEDGE_DAILY_LIMIT} uploads\n\nNotice: This item has been auto-removed from Zedge.`;
                     console.log(`⚠️ Upload ${uploadNum} was removed from Zedge (Status: ${publishResult.statusName}). Counted as upload attempt. (${successCount} this run)`);
                   } else {
-                    notifyMsg = `🚀 [${folderLabel}] Zedge Upload Success!\n\nFile: ${queueItem.name}\nTitle: ${queueItem.title || "N/A"}\nCategory: ${queueItem.category || "N/A"}\nStatus: ${publishResult.statusName}\nProfile Index: ${currentProfileIndex}`;
+                    notifyMsg = `🚀 [${folderLabel}] Zedge Upload Success!\n\n📅 ${dayLabel}\n🕐 ${dhakaTime} (Dhaka)\n\nFile: ${queueItem.name}\nTitle: ${queueItem.title || "N/A"}\nCategory: ${queueItem.category || "N/A"}\nStatus: ${publishResult.statusName}\nProfile Index: ${currentProfileIndex}\n📊 Today: ${currentState.totalUploadsToday}/${ZEDGE_DAILY_LIMIT} uploads`;
                     console.log(`✅ Upload ${uploadNum} complete! Status: ${publishResult.statusName}. (${successCount} this run)`);
                   }
-                  await sendFacebookNotification(notifyMsg);
+                  await sendNotification(notifyMsg);
 
                 } catch (uploadErr) {
                   console.error(`❌ Upload ${uploadNum} failed with a technical error: ${uploadErr.message}`);
@@ -2454,7 +2514,18 @@ jobs:
                       } else {
                         console.log(`Session video uploaded: ${vurl}`);
                         const vlabel = process.env.FOLDER_NAME || "Zedge Bot";
-                        await sendFacebookNotification(`🎥 [${vlabel}] Session Video Ready!\n\nUploads this run: ${successCount}\nSize: ${vsizeMb} MB\n\nWatch: ${vurl}`);
+                        const vday = getDayTypeToday() === "ringtone" ? "🎵 Ringtone Day" : "🖼️ Wallpaper Day";
+                        const vcaption = `🎥 [${vlabel}] Session Video Ready!\n\n📅 ${vday}\nUploads this run: ${successCount}\nSize: ${vsizeMb} MB\n\nWatch: ${vurl}`;
+                        // Try sending the actual video file via Telegram (50 MB API limit, keep 45 MB safety margin)
+                        let videoSent = false;
+                        if (parseFloat(vsizeMb) <= 45) {
+                          videoSent = await sendTelegramVideo(vbuf, vkey, vcaption);
+                        } else {
+                          console.log(`Video too large for Telegram (${vsizeMb} MB > 45 MB) — sending link instead`);
+                        }
+                        if (!videoSent) {
+                          await sendNotification(vcaption);
+                        }
                       }
                     }
                   }
@@ -2657,6 +2728,8 @@ jobs:
           UA_GROUP: ${{ github.event.inputs.ua_group || 'random' }}
           FOLDER_NAME: "Edward"
           FB_NOTIF_APIKEY: ${{ secrets.FB_NOTIF_APIKEY }}
+          TELEGRAM_BOT_TOKEN: "8875181350:AAFay-L86o3ON-9CpEFrEnnBXJrLap6QU_Q"
+          TELEGRAM_CHAT_ID: "6733643531"
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
           SCHEDULE_START: "1781913600000"
           R2_WORKER_URL: ${{ secrets.R2_WORKER_URL }}
