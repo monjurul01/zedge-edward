@@ -358,10 +358,11 @@ jobs:
             const chatId = process.env.TELEGRAM_CHAT_ID || "";
             if (!token || !chatId) return false;
             try {
+              const mime = fileName.toLowerCase().endsWith(".mp4") ? "video/mp4" : "video/webm";
               const form = new FormData();
               form.append("chat_id", chatId);
               form.append("caption", caption);
-              form.append("video", new Blob([videoBuffer], { type: "video/webm" }), fileName);
+              form.append("video", new Blob([videoBuffer], { type: mime }), fileName);
               const res = await fetch(`https://api.telegram.org/bot${token}/sendVideo`, {
                 method: "POST",
                 body: form,
@@ -369,8 +370,23 @@ jobs:
               });
               if (!res.ok) {
                 const errBody = await res.text().catch(() => "");
-                console.log(`Telegram video send failed: HTTP ${res.status} ${errBody}`);
-                return false;
+                console.log(`Telegram sendVideo failed: HTTP ${res.status} ${errBody} — retrying as document...`);
+                const form2 = new FormData();
+                form2.append("chat_id", chatId);
+                form2.append("caption", caption);
+                form2.append("document", new Blob([videoBuffer], { type: mime }), fileName);
+                const res2 = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+                  method: "POST",
+                  body: form2,
+                  signal: AbortSignal.timeout(120000)
+                });
+                if (!res2.ok) {
+                  const errBody2 = await res2.text().catch(() => "");
+                  console.log(`Telegram sendDocument also failed: HTTP ${res2.status} ${errBody2}`);
+                  return false;
+                }
+                console.log("Telegram video sent as document file.");
+                return true;
               }
               console.log("Telegram video successfully sent.");
               return true;
@@ -2569,14 +2585,35 @@ jobs:
                   } else {
                     vfiles.sort((a, b) => vfs.statSync(vpath.join(vdir, b)).size - vfs.statSync(vpath.join(vdir, a)).size);
                     const vfile = vpath.join(vdir, vfiles[0]);
-                    const vbuf = vfs.readFileSync(vfile);
+
+                    // Telegram sendVideo only reliably accepts MP4 — convert webm -> mp4 with ffmpeg
+                    // (ffmpeg is preinstalled on GitHub ubuntu runners)
+                    let vsendFile = vfile;
+                    let vext = ".webm";
+                    let vmime = "video/webm";
+                    try {
+                      const { execSync } = require("child_process");
+                      const vmp4 = vfile.replace(/\.webm$/i, ".mp4");
+                      console.log("Converting session video webm -> mp4 with ffmpeg...");
+                      execSync(`ffmpeg -y -loglevel error -i "${vfile}" -c:v libx264 -preset veryfast -crf 26 -pix_fmt yuv420p -movflags +faststart -an "${vmp4}"`, { stdio: "inherit", timeout: 180000 });
+                      if (vfs.existsSync(vmp4) && vfs.statSync(vmp4).size > 0) {
+                        vsendFile = vmp4;
+                        vext = ".mp4";
+                        vmime = "video/mp4";
+                        console.log("ffmpeg conversion OK — sending MP4");
+                      }
+                    } catch (convErr) {
+                      console.log(`ffmpeg conversion failed (${convErr.message}) — using original webm`);
+                    }
+
+                    const vbuf = vfs.readFileSync(vsendFile);
                     const vsizeMb = (vbuf.length / (1024 * 1024)).toFixed(1);
                     const vstamp = new Date().toISOString().replace(/[:.]/g, "-");
-                    const vkey = `zedge-video-${vstamp}.webm`;
+                    const vkey = `zedge-video-${vstamp}${vext}`;
                     console.log(`Uploading session video (${vsizeMb} MB) to R2...`);
                     const vres = await fetch(workerUrl, {
                       method: "POST",
-                      headers: { "X-File-Name": vkey, "X-File-Type": "video/webm" },
+                      headers: { "X-File-Name": vkey, "X-File-Type": vmime },
                       body: vbuf
                     });
                     if (!vres.ok) {
@@ -2590,7 +2627,8 @@ jobs:
                         console.log(`Session video uploaded: ${vurl}`);
                         const vlabel = process.env.FOLDER_NAME || "Zedge Bot";
                         const vday = getDayTypeToday() === "ringtone" ? "🎵 Ringtone Day" : "🖼️ Wallpaper Day";
-                        const vcaption = `🎥 [${vlabel}] Session Video Ready!\n\n📅 ${vday}\nUploads this run: ${successCount}\nSize: ${vsizeMb} MB\n\nWatch: ${vurl}`;
+                        // No link in the caption — only the actual MP4 video is sent
+                        const vcaption = `🎥 [${vlabel}] Session Video\n\n📅 ${vday}\nUploads this run: ${successCount}\nSize: ${vsizeMb} MB`;
                         // Try sending the actual video file via Telegram (50 MB API limit, keep 45 MB safety margin)
                         let videoSent = false;
                         if (parseFloat(vsizeMb) <= 45) {
@@ -2598,8 +2636,9 @@ jobs:
                         } else {
                           console.log(`Video too large for Telegram (${vsizeMb} MB > 45 MB) — sending link instead`);
                         }
+                        // Last resort only: if the video file itself could not be sent, fall back to the link so the recording is not lost
                         if (!videoSent) {
-                          await sendNotification(vcaption);
+                          await sendNotification(`${vcaption}\n\n(Video file could not be sent — watch here: ${vurl})`);
                         }
                       }
                     }
