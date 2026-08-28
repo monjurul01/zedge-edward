@@ -318,7 +318,7 @@ jobs:
             }
             try {
               const url = `https://api.callmebot.com/facebook/send.php?apikey=${encodeURIComponent(apikey)}&text=${encodeURIComponent(message)}`;
-              const res = await fetch(url);
+              const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
               if (!res.ok) {
                 console.log(`Facebook API response failed: HTTP ${res.status}`);
               } else {
@@ -337,7 +337,8 @@ jobs:
               const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ chat_id: chatId, text: message })
+                body: JSON.stringify({ chat_id: chatId, text: message }),
+                signal: AbortSignal.timeout(15000)
               });
               if (!res.ok) {
                 console.log(`Telegram API response failed: HTTP ${res.status}`);
@@ -363,7 +364,8 @@ jobs:
               form.append("video", new Blob([videoBuffer], { type: "video/webm" }), fileName);
               const res = await fetch(`https://api.telegram.org/bot${token}/sendVideo`, {
                 method: "POST",
-                body: form
+                body: form,
+                signal: AbortSignal.timeout(120000)
               });
               if (!res.ok) {
                 const errBody = await res.text().catch(() => "");
@@ -481,6 +483,18 @@ jobs:
             console.log("Checking Firebase Realtime Database queue...");
             const data = await firebaseGet(queuePath);
             if (!data) throw new Error("No items found in Realtime Database");
+
+            // Stale "processing" recovery: if a previous run crashed mid-upload,
+            // the item stays stuck in "processing" forever and no run ever picks it up again.
+            // Reset anything processing for over 30 minutes back to "queued".
+            const STALE_PROCESSING_MS = 30 * 60 * 1000;
+            for (const [staleId, staleItem] of Object.entries(data)) {
+              if (staleItem && staleItem.status === "processing" && (Date.now() - (staleItem.processingAt || 0)) > STALE_PROCESSING_MS) {
+                console.log(`♻️ Resetting stale processing item back to queued: ${staleItem.name || staleId}`);
+                await firebasePatch(`${queuePath}/${staleId}`, { status: "queued", processingAt: null });
+                staleItem.status = "queued";
+              }
+            }
 
             const dayType = getDayTypeToday();
             console.log(`Today is Day type: ${dayType || "any (no schedule set)"}`);
@@ -748,6 +762,47 @@ jobs:
             console.log(`${label} confirmed checked`);
           }
 
+          // Zedge wallpaper requirements: JPEG only, max 8 MB, min 1620x2880 px, max 25M px total
+          function getImageInfo(buf) {
+            if (buf[0] === 0xff && buf[1] === 0xd8) {
+              let i = 2;
+              while (i < buf.length - 9) {
+                if (buf[i] !== 0xff) { i++; continue; }
+                const marker = buf[i + 1];
+                if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+                  return { format: "jpeg", height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+                }
+                i += 2 + buf.readUInt16BE(i + 2);
+              }
+              return { format: "jpeg", width: 0, height: 0 };
+            }
+            if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+              return { format: "png", width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+            }
+            return { format: "unknown", width: 0, height: 0 };
+          }
+
+          function validateWallpaperFile(localFile) {
+            const buf = require("fs").readFileSync(localFile);
+            const sizeMb = buf.length / (1024 * 1024);
+            const info = getImageInfo(buf);
+            console.log(`File check: format=${info.format}, ${info.width}x${info.height}, ${sizeMb.toFixed(2)} MB`);
+            if (info.format !== "jpeg") {
+              throw new Error(`Zedge only accepts JPEG - this file is actually ${info.format.toUpperCase()} (renaming to .jpg does not convert it)`);
+            }
+            if (sizeMb > 8) {
+              throw new Error(`File too big for Zedge: ${sizeMb.toFixed(2)} MB (max 8 MB)`);
+            }
+            if (info.width && info.height) {
+              if (info.width < 1620 || info.height < 2880) {
+                throw new Error(`Image too small for Zedge: ${info.width}x${info.height} px (minimum 1620x2880)`);
+              }
+              if (info.width * info.height > 25000000) {
+                throw new Error(`Image has too many pixels: ${info.width}x${info.height} (max 25M px total)`);
+              }
+            }
+          }
+
           async function uploadWallpaperInDialog(page, localFile) {
             console.log("Waiting for Upload dialog (with file input inside)");
 
@@ -784,10 +839,15 @@ jobs:
             console.log("Uploading file");
             await fileInput.setInputFiles(localFile);
 
-            await page.waitForFunction(() => {
-              const input = document.querySelector('input[data-hook="form-field-files-input"]');
-              return input && input.files && input.files.length > 0;
-            });
+            try {
+              await page.waitForFunction(() => {
+                const input = document.querySelector('input[data-hook="form-field-files-input"]');
+                return input && input.files && input.files.length > 0;
+              }, null, { timeout: 20000 });
+            } catch (e) {
+              await page.screenshot({ path: "zedge-file-rejected.png", fullPage: true }).catch(() => {});
+              throw new Error("File did not attach within 20s - Zedge likely rejected it (JPEG only, max 8 MB, min 1620x2880 px). Check zedge-file-rejected.png");
+            }
 
             console.log("Waiting for Upload button to become enabled");
             const uploadButton = dialog
@@ -797,11 +857,20 @@ jobs:
             await uploadButton.waitFor({ state: "visible" });
             await scrollToElement(uploadButton);
 
-            await page.waitForFunction(() => {
-              const buttons = [...document.querySelectorAll('button[type="submit"]')];
-              const upload = buttons.find(btn => btn.textContent.trim() === "Upload");
-              return upload && upload.disabled === false;
-            });
+            try {
+              await page.waitForFunction(() => {
+                const buttons = [...document.querySelectorAll('button[type="submit"]')];
+                const upload = buttons.find(btn => btn.textContent.trim() === "Upload");
+                return upload && upload.disabled === false;
+              }, null, { timeout: 30000 });
+            } catch (e) {
+              const dialogText = await page.evaluate(() => {
+                const dlg = document.querySelector('[role="dialog"]');
+                return dlg ? dlg.innerText.slice(0, 300) : "";
+              }).catch(() => "");
+              await page.screenshot({ path: "zedge-upload-btn-stuck.png", fullPage: true }).catch(() => {});
+              throw new Error(`Upload button never became enabled - Zedge rejected the file. Dialog: ${dialogText || "see zedge-upload-btn-stuck.png"}`);
+            }
 
             await uploadButton.click();
 
@@ -2406,6 +2475,10 @@ jobs:
                   await autoKillConsent(page);
                   await page.screenshot({ path: `zedge-upload-menu-${uploadNum}.png`, fullPage: false });
 
+                  if (!queueItem.isMp3) {
+                    validateWallpaperFile(queueItem.localFile);
+                  }
+
                   await uploadWallpaperInDialog(page, queueItem.localFile);
 
                   await fillMetaDialog(page, {
@@ -2454,6 +2527,8 @@ jobs:
                   if (queueItem?.id) {
                     await markWallpaperFailed(queueItem.id, uploadErr.message).catch(() => {});
                   }
+                  const failLabel = process.env.FOLDER_NAME || "Zedge Bot";
+                  await sendNotification(`❌ [${failLabel}] Zedge Upload Failed!\n\nFile: ${queueItem?.name || "unknown"}\nReason: ${String(uploadErr.message).slice(0, 300)}`).catch(() => {});
                   await page.screenshot({ path: `zedge-error-upload-${uploadNum}.png`, fullPage: true }).catch(() => {});
                   console.log("Continuing to next upload despite error...");
                 }
