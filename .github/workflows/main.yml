@@ -89,8 +89,8 @@ jobs:
         shell: bash
         env:
           # v27.11: the gate reports a missed slot to Telegram as well (same bot / chat as the upload reports)
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8899129457:AAERgs5UOqx-cWR8RMOPVpDwqbvb0ixcJ38' }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '8998798162' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8875181350:AAFay-L86o3ON-9CpEFrEnnBXJrLap6QU_Q' }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '6733643531' }}
         run: |
           if [ "${{ inputs.force_run }}" = "true" ]; then
             echo "go=yes" >> "$GITHUB_OUTPUT"
@@ -111,7 +111,7 @@ jobs:
           //   exact=true  -> upload starts at HH:MM sharp (the gate sleeps until that minute if the ping came early;
           //                  a missed ping is caught up on the next ping within the same 3 h window).
           // Falls back to DEFAULT_WINDOWS if Firebase is unreachable. Health + run markers -> dashboardSettings/gate.
-          const DB = "https://YOUR-ZEDGE1-PROJECT-default-rtdb.firebaseio.com";
+          const DB = "https://zedge-r2-edward-hermes-default-rtdb.firebaseio.com";
           const ACCOUNT = "ZEDGE1";
           const DEFAULT_WINDOWS = [10, 15, 20];   // window start hours (Asia/Dhaka) - fallback only
           const WINDOW_HOURS = 3;                      // each window lasts 3 hours
@@ -1078,12 +1078,12 @@ jobs:
         shell: pwsh
         timeout-minutes: 15
         env:
-          FIREBASE_DB_URL: "https://YOUR-ZEDGE1-PROJECT-default-rtdb.firebaseio.com"
+          FIREBASE_DB_URL: "https://zedge-r2-edward-hermes-default-rtdb.firebaseio.com"
           ACCOUNT_LABEL: "Zedge 1"
           RUN_MODE: ${{ inputs.run_mode }}
           VPN_PROFILE: ${{ inputs.vpn_profile }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8875181350:AAFay-L86o3ON-9CpEFrEnnBXJrLap6QU_Q' }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '6733643531' }}
         run: |
           if ($env:RUN_MODE -eq 'vpn_test') { node vpn.mjs test } else { node vpn.mjs connect }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -1104,9 +1104,9 @@ jobs:
           const zedgePassword = process.env.ZEDGE_PASSWORD;
           const isHeadless = process.env.HEADLESS === "true";
 
-          const firebaseDatabaseURL = "https://YOUR-ZEDGE1-PROJECT-default-rtdb.firebaseio.com"; // <-- CONFIG: your Firebase Realtime Database URL for account 1
+          const firebaseDatabaseURL = "https://zedge-r2-edward-hermes-default-rtdb.firebaseio.com"; // <-- CONFIG: your Firebase Realtime Database URL for account 1
           const queuePath = "wallpaperQueue";
-          const r2WorkerUrl = "https://YOUR-R2-WORKER.YOUR-SUBDOMAIN.workers.dev"; // <-- CONFIG: your Cloudflare R2 worker URL
+          const r2WorkerUrl = "https://zedgemedia.monjurulgd2001.workers.dev"; // <-- CONFIG: your Cloudflare R2 worker URL
 
           if (!zedgeEmail) throw new Error("Zedge email is required");
           if (!zedgePassword) throw new Error("Zedge password is required");
@@ -1385,9 +1385,9 @@ jobs:
               else if (dhakaHour >= 12 && dhakaHour < 17) greetingTime = "শুভ দুপুর";
               else if (dhakaHour >= 17 && dhakaHour < 22) greetingTime = "শুভ সন্ধ্যা";
               else greetingTime = "শুভ রাত্রি";
-              return `হ্যালো শাওন ভাই, ${greetingTime}`;
+              return `হ্যালো মঞ্জুরুল ভাই, ${greetingTime}`;
             } catch (_) {
-              return "হ্যালো শাওন ভাই";
+              return "হ্যালো মঞ্জুরুল ভাই";
             }
           }
 
@@ -3763,8 +3763,8 @@ jobs:
           TOTAL_PROFILES: ${{ github.event.inputs.total_profiles }}
           UA_GROUP: ${{ github.event.inputs.ua_group }}
           # Optional - create these two repository secrets to receive Telegram reports
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8875181350:AAFay-L86o3ON-9CpEFrEnnBXJrLap6QU_Q' }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '6733643531' }}
           FOLDER_NAME: "Zedge 1"
           EXACT_TARGET_DHAKA: ${{ needs.gate.outputs.target }}   # v26.2: gate released early, hold Publish until this minute
           # v27.11 missed-slot recovery: slot(s) served by this run + how many uploads (2 when a missed slot is merged in)
@@ -3783,7 +3783,7 @@ jobs:
         shell: pwsh
         env:
           GATE_SLOTS: ${{ needs.gate.outputs.slots }}
-          FIREBASE_DB_URL: "https://YOUR-ZEDGE1-PROJECT-default-rtdb.firebaseio.com"
+          FIREBASE_DB_URL: "https://zedge-r2-edward-hermes-default-rtdb.firebaseio.com"
         run: |
           @'
           const DB = process.env.FIREBASE_DB_URL;
